@@ -1,0 +1,102 @@
+{
+  "_readme": "Historic map sheets. Each entry is shown for from_year <= year <= to_year; later-starting maps draw on top, and where a map has no tile the one beneath shows through. 'tiles' is an XYZ URL (https://... or a local path like maps/1862/{z}/{x}/{y}.png). Optional: minzoom, maxzoom, bounds [west,south,east,north], attribution. Keys starting with _ are ignored notes. Only use NLS tiles within their terms of use.",
+  "maps": [
+    {
+      "name": "OS six-inch 1st edition, Scotland, 1843-1882",
+      "tiles": "maps/os-six-inch-1st-edition-scotland-1843-1882/{z}/{x}/{y}.png",
+      "from_year": 1843,
+      "to_year": 1892,
+      "maxzoom": 16,
+      "attribution": "Map: National Library of Scotland",
+      "_note": "Series span. Set from_year to the survey year of YOUR sheet (see its page on maps.nls.uk); Perthshire was not surveyed in 1843.",
+      "source_tiles": "https://mapseries-tilesets.s3.amazonaws.com/os/6inchfirst/{z}/{x}/{y}.png",
+      "minzoom": 12,
+      "bounds": [
+        -3.6,
+        56.55,
+        -3.55,
+        56.58
+      ]
+    },
+    {
+      "name": "OS 25 inch 1892-1914 (Scotland North)",
+      "tiles": "maps/os-25-inch-1892-1914-scotland-north/{z}/{x}/{y}.png",
+      "from_year": 1892,
+      "to_year": 1914,
+      "maxzoom": 17,
+      "attribution": "Map: National Library of Scotland",
+      "source_tiles": "https://mapseries-tilesets.s3.amazonaws.com/25_inch/scotland_2/{z}/{x}/{y}.png",
+      "minzoom": 12,
+      "bounds": [
+        -3.6,
+        56.55,
+        -3.55,
+        56.58
+      ]
+    },
+    {
+      "name": "Roy Highlands - 1747-52",
+      "tiles": "maps/roy-highlands-1747-52/{z}/{x}/{y}.png",
+      "from_year": 1747,
+      "to_year": 1752,
+      "maxzoom": 14,
+      "attribution": "Map: National Library of Scotland",
+      "source_tiles": "https://mapseries-tilesets.s3.amazonaws.com/roy/highlands/{z}/{x}/{y}.png",
+      "minzoom": 12,
+      "bounds": [
+        -3.6,
+        56.55,
+        -3.55,
+        56.58
+      ]
+    },
+    {
+      "name": "OS One-Inch 3rd Edition - 1902-23",
+      "tiles": "maps/os-one-inch-3rd-edition-1902-23/{z}/{x}/{y}.png",
+      "from_year": 1902,
+      "to_year": 1923,
+      "maxzoom": 15,
+      "attribution": "Map: National Library of Scotland",
+      "source_tiles": "https://mapseries-tilesets.s3.amazonaws.com/1inch_3rd_col/{z}/{x}/{y}.png",
+      "minzoom": 12,
+      "bounds": [
+        -3.6,
+        56.55,
+        -3.55,
+        56.58
+      ]
+    },
+    {
+      "name": "OS GSGS 3906 1940-43",
+      "tiles": "maps/os-gsgs-3906-1940-43/{z}/{x}/{y}.png",
+      "from_year": 1940,
+      "to_year": 1943,
+      "maxzoom": 15,
+      "attribution": "Map: National Library of Scotland",
+      "source_tiles": "https://mapseries-tilesets.s3.amazonaws.com/gsgs3906/{z}/{x}/{y}.png",
+      "minzoom": 12,
+      "bounds": [
+        -3.6,
+        56.55,
+        -3.55,
+        56.58
+      ]
+    },
+    {
+      "name": "Ordnance Survey 'Provisional' edition (1:25,000), 1937-1961",
+      "tiles": "maps/ordnance-survey-provisional-edition-1-25-000-1937-1961/{z}/{x}/{y}.png",
+      "from_year": 1937,
+      "to_year": 1961,
+      "maxzoom": 15,
+      "attribution": "Map: National Library of Scotland",
+      "source_tiles": "https://api.maptiler.com/tiles/uk-osgb25k1937/{z}/{x}/{y}.jpg?key=wv0AU1AXH7akvUkNUgLx ",
+      "minzoom": 12,
+      "bounds": [
+        -3.6,
+        56.55,
+        -3.55,
+        56.58
+      ]
+    }
+  ]
+}

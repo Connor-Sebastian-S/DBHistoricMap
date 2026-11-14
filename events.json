@@ -1,0 +1,221 @@
+
+{
+  "_readme": "Historical events displayed in the timeline panel. Events appear when from_year <= year <= to_year. Omit to_year for single-year events. Fields: title, from_year, to_year, text, image, image_caption, lon, lat and zoom. Dates are approximate where indicated. Image fields are optional and can be populated with local assets.",
+  "events": [
+    {
+      "title": "Early Christian community at Dunkeld",
+      "from_year": 600,
+      "to_year": 849,
+      "text": "Dunkeld developed into an important early Christian centre. Local church history traces its Christian origins to the 7th century. Historic Environment Scotland confirms that a Pictish monastery occupied the site before the medieval cathedral was constructed. The precise foundation date of the religious community is unknown.",
+      "lon": -3.59017,
+      "lat": 56.56531,
+      "zoom": 16
+    },
+    {
+      "title": "Relics of St Columba brought to Dunkeld",
+      "from_year": 849,
+      "text": "King Kenneth MacAlpin had relics of St Columba transferred from Iona to a specially constructed church at Dunkeld. Viking attacks had made Iona increasingly unsafe. The relics helped establish Dunkeld as one of the most important religious centres in the early Kingdom of the Scots.",
+      "lon": -3.59017,
+      "lat": 56.56531,
+      "zoom": 16
+    },
+    {
+      "title": "Viking raids on Dunkeld",
+      "from_year": 900,
+      "to_year": 999,
+      "text": "Dunkeld was itself attacked by Vikings during the 10th century. The raids contributed to the decline of its position as the principal centre of the Scottish Church. Ecclesiastical influence subsequently shifted further east to Kilrymont, now known as St Andrews.",
+      "lon": -3.59017,
+      "lat": 56.56531,
+      "zoom": 15
+    },
+    {
+      "title": "Dunkeld becomes a bishopric",
+      "from_year": 1114,
+      "text": "King David I reorganised the Scottish bishoprics and established Dunkeld as an episcopal see. Cormac became its first bishop, holding the position until approximately 1132. Dunkeld consequently became an established centre of ecclesiastical administration in medieval Scotland.",
+      "lon": -3.59017,
+      "lat": 56.56531,
+      "zoom": 16
+    },
+    {
+      "title": "Construction of Dunkeld Cathedral begins",
+      "from_year": 1250,
+      "to_year": 1305,
+      "text": "The medieval cathedral gradually took shape over approximately 250 years. Its choir, the oldest surviving section, was constructed during the mid-to-late 13th century and extensively rebuilt in the early 14th century. The cathedral replaced the earlier religious buildings on this ancient ecclesiastical site.",
+      "lon": -3.59017,
+      "lat": 56.56531,
+      "zoom": 16
+    },
+    {
+      "title": "Construction of the cathedral nave",
+      "from_year": 1406,
+      "text": "Construction of the central nave of Dunkeld Cathedral began in 1406. Its architectural design incorporated influences from the Low Countries. The nave became one of the principal elements of the increasingly impressive medieval cathedral.",
+      "lon": -3.59017,
+      "lat": 56.56531,
+      "zoom": 16
+    },
+    {
+      "title": "Construction of the cathedral tower",
+      "from_year": 1469,
+      "text": "Work began on the cathedral's western tower and its distinctive off-centre window. The tower became one of Dunkeld's most recognisable architectural features. Construction formed part of the final major phase of the cathedral's medieval development.",
+      "lon": -3.59017,
+      "lat": 56.56531,
+      "zoom": 16
+    },
+    {
+      "title": "The Scottish Reformation",
+      "from_year": 1560,
+      "text": "The Scottish Reformation brought an end to Dunkeld Cathedral's role as a Roman Catholic ecclesiastical centre. The building was stripped of religious furnishings and suffered extensive damage, including the loss of its roofs. The surviving eastern choir was subsequently retained for use as a parish church, while much of the remainder became a ruin.",
+      "lon": -3.59017,
+      "lat": 56.56531,
+      "zoom": 16
+    },
+    {
+      "title": "Dunkeld House constructed",
+      "from_year": 1676,
+      "to_year": 1684,
+      "text": "The first Dunkeld House was constructed for the Atholl family, replacing an earlier residence. Designed by the renowned Scottish architect Sir William Bruce, the house became the centrepiece of the Atholl estate. The surrounding grounds would subsequently develop into an extensive designed landscape.",
+      "lon": -3.60004,
+      "lat": 56.56708,
+      "zoom": 14
+    },
+    {
+      "title": "Battle of Dunkeld",
+      "from_year": 1689,
+      "text": "On 21 August 1689, government troops known as the Cameronians fought Jacobite forces supporting the deposed King James VII. The Jacobites, commanded by Colonel Alexander Cannon, attacked the town, which was defended by Lieutenant Colonel William Cleland. Fierce street-to-street fighting continued for several hours. The Cameronians eventually prevailed, although Cleland was killed. Much of Dunkeld was burned or destroyed during the fighting, and the town centre seen today largely dates from the subsequent rebuilding.",
+      "lon": -3.59124,
+      "lat": 56.5672,
+      "zoom": 16
+    },
+    {
+      "title": "Birth of Niel Gow",
+      "from_year": 1727,
+      "text": "Niel Gow was born on 22 March 1727 in the Inver and Strathbraan area near Dunkeld. He became one of Scotland's most celebrated traditional fiddlers and composers, producing numerous compositions that remain central to Scottish traditional music. His family settled at Inver, where the Gow family lived for generations.",
+      "lon": -3.60279,
+      "lat": 56.5618,
+      "zoom": 16
+    },
+    {
+      "title": "European larch introduced to the Dunkeld estate",
+      "from_year": 1738,
+      "text": "European larch trees were introduced to the Dunkeld estate. The trees were among the earliest examples of European larch cultivation in Britain. Their successful growth helped establish the Atholl estate's reputation for experimental forestry and introduced a tree species that would become widespread in Scottish plantations. Some of the earliest surviving larches are still associated with Dunkeld.",
+      "lon": -3.60004,
+      "lat": 56.56708,
+      "zoom": 14
+    },
+    {
+      "title": "Bonnie Prince Charlie visits Dunkeld",
+      "from_year": 1745,
+      "text": "During the Jacobite Rising of 1745, Charles Edward Stuart travelled south towards Edinburgh. Local historical research records that he was entertained at Dunkeld House by William, Marquis of Tullibardine, brother of the Duke of Atholl. Niel Gow was reportedly among the musicians who performed for the Prince during his visit.",
+      "lon": -3.60004,
+      "lat": 56.56708,
+      "zoom": 14
+    },
+    {
+      "title": "The Hermitage established",
+      "from_year": 1757,
+      "to_year": 1758,
+      "text": "A summerhouse and retreat was constructed above the Black Linn Falls on the River Braan as part of the developing Atholl estate landscape. Designed as a place of contemplation and leisure, the building gave the surrounding woodland its name: The Hermitage. The wider landscape was developed with carefully arranged paths, trees and viewpoints.",
+      "lon": -3.61401,
+      "lat": 56.55748,
+      "zoom": 16
+    },
+    {
+      "title": "East Ferry disaster",
+      "from_year": 1766,
+      "text": "A ferry crossing of the River Tay downstream from Little Dunkeld Church capsized while carrying thirteen passengers and four horses. Six people drowned. The accident illustrated the dangers of crossing the Tay by ferry and became part of the history behind the eventual construction of a permanent bridge at Dunkeld.",
+      "zoom": 15
+    },
+    {
+      "title": "Ossian's Hall constructed",
+      "from_year": 1782,
+      "to_year": 1783,
+      "text": "The original Hermitage summerhouse was replaced by the elaborate Ossian's Hall. Designed as an ornamental folly overlooking the Black Linn Falls, its interior incorporated mirrors, paintings and ingenious moving panels. A concealed mechanism caused a large painting of Ossian to slide away, revealing the spectacular waterfall beyond. The building became a celebrated attraction for visitors to the area.",
+      "lon": -3.61401,
+      "lat": 56.55748,
+      "zoom": 16
+    },
+    {
+      "title": "Construction of Dunkeld Bridge",
+      "from_year": 1805,
+      "to_year": 1809,
+      "text": "Thomas Telford designed the impressive stone bridge across the River Tay. Construction took place over several years. The bridge opened to traffic in 1808 and received final approval as complete in 1809. Its seven arches replaced the unreliable ferry crossings and earlier timber bridges, providing a permanent road connection between Dunkeld and Birnam. The bridge was financed partly by the Duke of Atholl, who was authorised to collect tolls from its users.",
+      "lon": -3.58528,
+      "lat": 56.56391,
+      "zoom": 16
+    },
+    {
+      "title": "Perth and Dunkeld Railway opens",
+      "from_year": 1856,
+      "text": "The Perth and Dunkeld Railway opened on 7 April 1856. The original terminus was called Birnam and Dunkeld and was situated on the southern side of the River Tay, in Birnam. The railway dramatically improved transport connections and encouraged the development of both settlements as destinations for visitors to Highland Perthshire.",
+      "lon": -3.57833,
+      "lat": 56.55702,
+      "zoom": 16
+    },
+    {
+      "title": "Railway extended towards the Highlands",
+      "from_year": 1863,
+      "text": "The railway line was extended north from Dunkeld towards Pitlochry and the wider Highlands. Dunkeld station consequently changed from a terminus into a through station. This helped establish the route as part of an increasingly important railway connection between Perth and Inverness.",
+      "lon": -3.57833,
+      "lat": 56.55702,
+      "zoom": 15
+    },
+    {
+      "title": "Dunkeld Bridge toll riots",
+      "from_year": 1868,
+      "text": "Growing resentment over tolls charged by the Duke of Atholl led to a series of protests and violent disturbances. In February, protesters destroyed a toll gate on Dunkeld Bridge, throwing it into the River Tay. The dispute became the subject of questions in the House of Commons. Further attacks on the toll gates followed during the summer, as residents challenged the Duke's continued collection of crossing charges.",
+      "lon": -3.58528,
+      "lat": 56.56391,
+      "zoom": 16
+    },
+    {
+      "title": "Public meeting beneath the Birnam Oak",
+      "from_year": 1868,
+      "text": "On 16 June, opponents of the Dunkeld Bridge tolls held a public meeting beneath the famous Birnam Oak. The gathering formed part of the campaign against the Duke of Atholl's toll charges. Protesters subsequently attacked the bridge toll gates using tools including saws, hammers and axes. The oak thus became associated with a significant episode of local popular protest, in addition to its literary association with Shakespeare's Macbeth.",
+      "lon": -3.5766,
+      "lat": 56.56162,
+      "zoom": 17
+    },
+    {
+      "title": "Ossian's Hall damaged by explosives",
+      "from_year": 1869,
+      "text": "Part of Ossian's Hall at The Hermitage was blown up using gunpowder. The building was subsequently left to deteriorate. The National Trust for Scotland considers the destruction likely to have been a protest against the bridge tolls imposed by the Duke of Atholl, although the precise motive is not certain.",
+      "lon": -3.61401,
+      "lat": 56.55748,
+      "zoom": 16
+    },
+    {
+      "title": "Dunkeld Bridge tolls abolished",
+      "from_year": 1879,
+      "text": "After decades of resentment and repeated protests, toll collection on Dunkeld Bridge finally came to an end when the bridge passed into the control of the County Roads Authority. The removal of tolls ended a long-running source of conflict between the local population and the Atholl estate.",
+      "lon": -3.58528,
+      "lat": 56.56391,
+      "zoom": 16
+    },
+    {
+      "title": "Present Dunkeld House constructed",
+      "from_year": 1899,
+      "to_year": 1901,
+      "text": "The present Dunkeld House was constructed for the 7th Duke of Atholl. Designed by architect E. J. McIntyre Henry, it replaced earlier houses on the estate. The building remains an important architectural feature of the historic Dunkeld landscape and is now operated as a hotel.",
+      "lon": -3.6113,
+      "lat": 56.5651,
+      "zoom": 15
+    },
+    {
+      "title": "The Hermitage donated to the National Trust for Scotland",
+      "from_year": 1943,
+      "text": "The 8th Duchess of Atholl donated Ossian's Hall and approximately 33 acres of woodland along the River Braan to the National Trust for Scotland. The donation helped protect the historic landscape and secure the future of one of Dunkeld's most recognisable natural and architectural attractions.",
+      "lon": -3.61401,
+      "lat": 56.55748,
+      "zoom": 15
+    },
+    {
+      "title": "Restoration of Ossian's Hall",
+      "from_year": 1951,
+      "to_year": 1952,
+      "text": "Following its acquisition by the National Trust for Scotland, Ossian's Hall was salvaged and restored after decades of neglect and damage. The building was simplified compared with its original elaborate interior, but its role as a viewing point overlooking the Black Linn Falls was preserved.",
+      "lon": -3.61401,
+      "lat": 56.55748,
+      "zoom": 16
+    }
+  ]
+}
