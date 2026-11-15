@@ -1,0 +1,1432 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Dunkeld through time</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://unpkg.com" crossorigin>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<style>
+  /* Everything outside the mapped area is plain black, including the page behind the canvas. */
+  html, body, #map { margin: 0; height: 100%; background: #000; }
+  #side { position: absolute; top: 10px; left: 10px; z-index: 1; width: 270px; display: flex;
+          flex-direction: column; gap: 8px; max-height: calc(100% - 20px); }
+  #panel, #events { background: rgba(255,255,255,.93); padding: 10px 12px; border-radius: 6px;
+    font: 13px system-ui, sans-serif; line-height: 1.5; }
+  #events { overflow-y: auto; min-height: 0; }
+  #events h3 { margin: 0 0 4px; font-size: 13px; }
+  #events .ev { border-top: 1px solid #ddd; padding: 6px 0; }
+  #events .ev small { color: #666; }
+  #events .ev img { display: block; width: 100%; max-height: 150px; object-fit: cover; border-radius: 4px; margin-top: 4px; }
+  #events .ev-none { color: #777; font-size: 12px; }
+  #events button { margin-top: 4px; font-size: 12px; cursor: pointer; }
+  #panel input[type=range] { width: 100%; }
+  #panel .opts { display: grid; grid-template-columns: 1fr 1fr; gap: 0 8px; margin: 4px 0; }
+  #panel .row { display: flex; align-items: center; gap: 6px; margin-top: 2px; }
+  #panel .row input[type=range] { flex: 1; width: auto; min-width: 0; }
+  #year { font-size: 22px; font-weight: 600; }
+  #status, #activeMaps, #perf { color: #555; font-size: 12px; margin-top: 4px; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="side">
+<div id="panel">
+  <div>Year: <span id="year">2026</span></div>
+  <input id="yearSlider" type="range" min="1200" max="2026" step="1" value="2026" aria-label="Year">
+  <label>Historic map opacity
+    <input id="mapOpacity" type="range" min="0" max="1" step="0.05" value="0.85">
+  </label>
+  <div id="activeMaps"></div>
+  <div class="opts">
+    <label><input id="bldVis" type="checkbox" checked> Buildings</label>
+    <label><input id="treeVis" type="checkbox" checked> Trees</label>
+    <label><input id="roadsVis" type="checkbox" checked> Roads &amp; tracks</label>
+    <label><input id="waterVis" type="checkbox" checked> Flowing water</label>
+    <label><input id="mistVis" type="checkbox" checked> Mountain mist</label>
+    <label><input id="texVis" type="checkbox" checked> Ground textures</label>
+  </div>
+  <label class="row">Mist above
+    <input id="mistHeight" type="range" min="25" max="650" step="25" value="25">
+    <span id="mistHeightValue">25 m</span>
+  </label>
+  <label class="row">Season
+    <select id="season">
+      <option value="auto" selected>Automatic</option>
+      <option value="spring">Spring</option>
+      <option value="summer">Summer</option>
+      <option value="autumn">Autumn</option>
+      <option value="winter">Winter</option>
+    </select>
+    <span id="seasonResolved"></span>
+  </label>
+  <label class="row">Quality
+    <select id="quality">
+      <option value="auto">Automatic</option>
+      <option value="low">Low</option>
+      <option value="medium">Medium</option>
+      <option value="high">High</option>
+    </select>
+  </label>
+  <div id="status" aria-live="polite">Loading…</div>
+  <div id="perf"></div>
+</div>
+<div id="events" hidden></div>
+</div>
+
+<script>
+window.addEventListener('error', event => {
+  const el = document.getElementById('status');
+  if (el && event.message) el.textContent = `JavaScript error: ${event.message}`;
+});
+window.addEventListener('unhandledrejection', event => {
+  const el = document.getElementById('status');
+  const reason = event.reason && (event.reason.message || String(event.reason));
+  if (el) el.textContent = `Startup error: ${reason || 'unknown promise rejection'}`;
+});
+</script>
+
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+
+<!-- The minified Three.js build is about half the size of three.module.js (less to download and parse).
+     GLTFLoader is only fetched if there are building models to load. -->
+<script type="importmap">
+{ "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.min.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+} }
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { areaBounds, padBounds, inBounds, centroid, EventIndex, generateTrees, localiseTrees, packTreeChunk,
+         buildTreeMeshes, buildWater, buildTransport, chunkTriangles, makeWaterTest, makeCorridors, transportClass,
+         planMist, makeFrame, Heightfield, terrariumM, mercX, mercY,
+         pickModelHit, geomBBox, bboxesOverlap, clipGeometryToBox, mulberry32 } from './viewer_utils.js';
+
+// ============================================================ settings
+const AREA_CENTRE = [-3.5853585,56.5638598,];
+const AREA_HALF_M = [1200, 1200];
+const DEFAULT_YEAR = 2026;
+const DEFAULT_PITCH = 50, DEFAULT_BEARING = 0, MAX_PITCH = 75;
+const IDLE_MS = 60000;
+const IDLE_RESETS_YEAR = false;
+const EXAGGERATION = 1.0;
+const MODERN_FROM = 2000;               // buildings with no from_year count as modern
+const FOREST_UNDATED_FROM = null; // set to null to keep forests that have no from_year visible in every year
+const TERRAIN_MAXZOOM = 16;
+const FLOW_REVERSE = false;             // true if your waterway lines are digitised upstream
+const FLOW_SPEED = 1.0;                 // multiplier on the flow speed (rivers ~1 m/s)
+const MIST_FPS = 4;                     // mist drifts slowly, it does not need more
+const FOREST_FILES = ['forest4.geojson', 'forests.geojson'];   // first one that exists is used
+
+// Quality tiers. "Automatic" picks one from the device; ?quality=low|medium|high or the panel overrides it.
+const TIERS = {
+  low:    { pixelRatio: 1,    maxTrees: 15000, mistPuffs: 160, animFps: 12, heightZoom: 14, treeMinZoom: 15.5, waterMinZoom: 15,   waterMaxEdge: 45, transportStep: 4,   transportMinZoom: 15.5, tileCache: 16 },
+  medium: { pixelRatio: 1.25, maxTrees: 30000, mistPuffs: 320, animFps: 15, heightZoom: 15, treeMinZoom: 15,   waterMinZoom: 14.5, waterMaxEdge: 30, transportStep: 3,   transportMinZoom: 15,   tileCache: 32 },
+  high:   { pixelRatio: 1.5,  maxTrees: 60000, mistPuffs: 520, animFps: 24, heightZoom: 15, treeMinZoom: 14.5, waterMinZoom: 14,   waterMaxEdge: 20, transportStep: 2.5, transportMinZoom: 14.5, tileCache: 64 },
+};
+function chooseQuality() {
+  const q = new URLSearchParams(location.search).get('quality');
+  if (TIERS[q]) return q;
+  const mobile = /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent);
+  const mem = navigator.deviceMemory ?? 8, cores = navigator.hardwareConcurrency || 4;
+  if (mobile || mem <= 4 || cores <= 4) return 'low';
+  return mem >= 8 && cores >= 8 ? 'high' : 'medium';
+}
+const QUALITY = chooseQuality();
+const TIER = TIERS[QUALITY];
+
+const AREA = areaBounds(AREA_CENTRE, AREA_HALF_M);
+const DEM_BOUNDS = padBounds(AREA, 0.004);     // no terrain tiles are requested outside this
+const BASE = location.origin + location.pathname.replace(/[^/]*$/, '');
+const absUrl = u => /^(https?:)?\/\//.test(u) ? u : BASE + u;
+const LOCAL_DEM = 'tiles_masked/{z}/{x}/{y}.png';
+const GLOBAL_DEM = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
+
+const $ = id => document.getElementById(id);
+const statusEl = $('status');
+const tick = () => new Promise(r => setTimeout(r, 0));
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const toYear = v => (v == null || v === '' || !Number.isFinite(Number(v))) ? null : Number(v);
+const rgb = hex => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255);
+const mixHex = (a, b, t) => '#' + rgb(a).map((v, i) => Math.round((v + (rgb(b)[i] - v) * t) * 255).toString(16).padStart(2, '0')).join('');
+
+const getJson = async (url, fallback) => {
+  try {
+    const r = await fetch(url);
+    if (r.ok) return await r.json();
+  } catch (e) {}
+  return fallback;
+};
+const getJsonFirst = async (urls, fallback) => {
+  for (const u of urls) { const v = await getJson(u, undefined); if (v !== undefined) return v; }
+  return fallback;
+};
+
+// ============================================================ seasonal palettes
+const TREE_PALETTES = {
+  spring: { broadleaf: ['#8fbd5e', '#a5c96a', '#b5d47a', '#7eaa55'], conifer: ['#4f8b5e', '#5b9563', '#467b55'] },
+  summer: { broadleaf: ['#477d43', '#568c49', '#679957', '#3f713d'], conifer: ['#2f6848', '#397450', '#285d42'] },
+  autumn: { broadleaf: ['#d99537', '#c96832', '#e1b84d', '#a94b30'], conifer: ['#3d704d', '#4b7850', '#597b53'] },
+  winter: { broadleaf: ['#88735f', '#9b8065', '#756b60', '#a18c75'], conifer: ['#526b58', '#46634f', '#5b705d'] },
+};
+const TRUNK_COLOUR = '#6b4f35';
+const WATER_SEASONS = {
+  spring: { water: '#a9cfdb', bed: '#416f91', surface: '#a8e0ee', ripple: 0.34 },
+  summer: { water: '#91c4da', bed: '#356c91', surface: '#79c8e6', ripple: 0.42 },
+  autumn: { water: '#a5c1c9', bed: '#496f82', surface: '#a8d1d9', ripple: 0.32 },
+  winter: { water: '#b8cbd3', bed: '#54758a', surface: '#d0e7ed', ripple: 0.25 },
+};
+
+// ============================================================ ground cover: seasonal colours + textures
+const resolveSeason = v => {
+  if (v && v !== 'auto') return v;
+  const m = new Date().getMonth() + 1;
+  return m >= 3 && m <= 5 ? 'spring' : m >= 6 && m <= 8 ? 'summer' : m >= 9 && m <= 11 ? 'autumn' : 'winter';
+};
+// Forest floor colour per season and type of wood, matched to the tree palettes: broadleaf woods follow the
+// seasons (green, then orange-brown leaf litter in autumn, bare brown in winter); conifer floors stay a dark
+// needle-brown green all year.
+const FOREST_FLOOR = {
+  spring: { broadleaf: '#93b873', mixed: '#8cae6d', conifer: '#6f8a58' },
+  summer: { broadleaf: '#79a068', mixed: '#739a63', conifer: '#5f8057' },
+  autumn: { broadleaf: '#b7894f', mixed: '#a68656', conifer: '#6a7a52' },
+  winter: { broadleaf: '#8f8370', mixed: '#857d6c', conifer: '#6d775f' },
+};
+const forestFloorColour = season => ['match', ['get', 'tree_type'],
+  'conifer', FOREST_FLOOR[season].conifer, 'broadleaf', FOREST_FLOOR[season].broadleaf, FOREST_FLOOR[season].mixed];
+// Green areas: each class keeps its own colour but is pulled towards the season's grass tint.
+const GREEN_TINT = { spring: '#9fd47c', summer: '#afd28e', autumn: '#c1bf80', winter: '#c9cdb4' };
+const GREEN_CLASSES = {
+  farmland: '#bed797', farmyard: '#aabd89', meadow: '#afd28e', grass: '#afd28e', orchard: '#afd28e', allotments: '#a4cb79',
+  garden: '#a0c783', flowerbed: '#d5b98c', recreation_ground: '#70b982', pitch: '#65a77b', sports_centre: '#83ad91',
+  playground: '#d0c18c', golf_course: '#9bc579', religious: '#b3b99a', cemetery: '#a3b69b', grave_yard: '#b1c1a5',
+  heath: '#b9bd83', scrub: '#91ae83',
+};
+const GREEN_KEEP_OWN = new Set(['flowerbed', 'pitch', 'sports_centre', 'playground', 'religious']);   // follow the season less
+const NO_GRASS_TEXTURE = ['flowerbed', 'pitch', 'sports_centre', 'playground'];
+const greenColour = season => ['match', ['get', 'cls'],
+  ...Object.entries(GREEN_CLASSES).flatMap(([cls, c]) => [cls, mixHex(c, GREEN_TINT[season], GREEN_KEEP_OWN.has(cls) ? 0.25 : 0.65)]),
+  mixHex('#afd28e', GREEN_TINT[season], 0.65)];
+const fadeInFrom14 = opacity => ['interpolate', ['linear'], ['zoom'], 14, 0, 15.2, opacity];
+
+// Tileable ground textures, drawn once per season on demand (see styleimagemissing) as semi-transparent
+// speckle over the colour layer beneath: fallen leaves, conifer needles, grass blades. MapLibre drapes
+// them over the terrain, so they follow the ground exactly and the hillshade still shades them.
+function drawPattern(kind, season) {
+  const S = 128, cv = document.createElement('canvas');
+  cv.width = cv.height = S;
+  const ctx = cv.getContext('2d', { willReadFrequently: true });
+  let seed = 7; for (const ch of kind + season) seed = (seed * 31 + ch.charCodeAt(0)) >>> 0;
+  const rnd = mulberry32(seed), pick = a => a[Math.floor(rnd() * a.length)], range = (a, b) => a + (b - a) * rnd();
+  // every mark is drawn again offset by +-S so the tile repeats without seams
+  const wrapped = (x, y, r, draw) => {
+    for (const dx of [-S, 0, S]) for (const dy of [-S, 0, S]) { const X = x + dx, Y = y + dy; if (X > -r && X < S + r && Y > -r && Y < S + r) draw(X, Y); }
+  };
+  const blob = (col, a, rx, ry, rot) => {
+    wrapped(rnd() * S, rnd() * S, Math.max(rx, ry) + 1, (X, Y) => {
+      ctx.globalAlpha = a; ctx.fillStyle = col; ctx.beginPath(); ctx.ellipse(X, Y, rx, ry, rot, 0, Math.PI * 2); ctx.fill();
+    });
+  };
+  const stroke = (col, a, len, ang, w) => {
+    const dx = Math.cos(ang) * len, dy = Math.sin(ang) * len;
+    wrapped(rnd() * S, rnd() * S, len + 2, (X, Y) => {
+      ctx.globalAlpha = a; ctx.strokeStyle = col; ctx.lineWidth = w; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(X, Y); ctx.lineTo(X + dx, Y + dy); ctx.stroke();
+    });
+  };
+  const frost = n => { for (let i = 0; i < n; i++) blob('#ffffff', range(0.2, 0.4), range(0.8, 1.8), range(0.8, 1.8), 0); };
+  const dots = (n, cols) => { for (let i = 0; i < n; i++) blob(pick(cols), 0.9, range(1.1, 1.8), range(1.1, 1.8), 0); };
+
+  if (kind === 'litter') {                                    // broadleaf and mixed woods: fallen leaves
+    const pal = {
+      autumn: ['#c9692b', '#d8953a', '#a4442a', '#e0b34c', '#8a5a30', '#b9803f'],
+      winter: ['#7b6b55', '#8e7c64', '#6c5e4e', '#a3957a'],
+      spring: ['#7ba958', '#9cc56b', '#b6d57b', '#8b7049'],
+      summer: ['#3e7a3b', '#4e8a45', '#2e6a37', '#5b904b', '#6c5b3b'],
+    }[season];
+    const count = { autumn: 100, winter: 85, spring: 55, summer: 60 }[season];
+    for (let i = 0; i < count; i++) blob(pick(pal), range(0.6, 0.9), range(3.5, 6.5), range(1.8, 3), rnd() * Math.PI);
+    for (let i = 0; i < 14; i++) stroke('#4a3524', 0.5, range(7, 16), rnd() * Math.PI, 1.1);     // twigs
+    if (season === 'winter') frost(26);
+    if (season === 'spring') dots(10, ['#ffffff', '#f4f1c9']);                                   // wood anemones
+  } else if (kind === 'needles') {                            // conifer floors: needles and a little moss
+    const pal = ['#6b4a2e', '#7d5a38', '#5a3f27', '#8a6a45'];
+    for (let i = 0; i < 6; i++) blob('#3b2a1a', 0.22, range(8, 14), range(5, 9), rnd() * Math.PI);
+    for (let i = 0; i < 260; i++) stroke(pick(pal), range(0.55, 0.85), range(5, 11), rnd() * Math.PI, 1);
+    if (season === 'spring' || season === 'summer') for (let i = 0; i < 26; i++) blob('#5d8a4a', 0.35, range(1.5, 3), range(1.5, 3), 0);
+    if (season === 'winter') frost(22);
+  } else {                                                    // grass blades
+    const pal = {
+      spring: ['#7fc05a', '#9ad66f', '#6aa84b', '#b2e083'],
+      summer: ['#6aa84b', '#7fbb59', '#5a9440', '#8fc965'],
+      autumn: ['#b4a85a', '#a0914c', '#c9b96a', '#8f7f45', '#bf7a3a'],
+      winter: ['#c8c0a0', '#b5ad8c', '#d6d0b8', '#a39b7c'],
+    }[season];
+    for (let i = 0; i < 320; i++) stroke(pick(pal), range(0.5, 0.85), range(5, 11), -Math.PI / 2 + range(-0.7, 0.7), range(1, 1.4));
+    if (season === 'spring') dots(14, ['#ffffff', '#fff3a8']);                                   // daisies and buttercups
+    if (season === 'summer') dots(6, ['#ffffff', '#f2d26b']);
+    if (season === 'winter') frost(30);
+  }
+  ctx.globalAlpha = 1;
+  return ctx.getImageData(0, 0, S, S);
+}
+
+// ============================================================ GPU shaders (Three.js)
+// Shared uniforms: changing the year, season or time updates every material with no CPU rebuild.
+const Uni = {
+  uYear: { value: DEFAULT_YEAR },
+  uTime: { value: 0 },
+  uLift: { value: 0.3 },
+  uWet: { value: 0.3 },                  // 0 dry .. 1 sodden: how muddy dirt roads look (set by the season)
+};
+const vec3Array = n => Array.from({ length: n }, () => new THREE.Vector3());
+const leafBroad = vec3Array(4), leafConif = vec3Array(4), trunkRGB = new THREE.Vector3(...rgb(TRUNK_COLOUR));
+const waterColour = new THREE.Vector3(), waterHi = new THREE.Vector3(), waterLo = new THREE.Vector3();
+const waterStrength = { value: 0.8 };
+
+// One instance = one tree. The shared low-poly mesh is shaped by per-instance parameters (see
+// packTreeChunk in viewer_utils.js). Trees outside their date range are collapsed off-screen.
+const TREE_VERT = /* glsl */`
+attribute float aPart;
+attribute vec4 aA, aB, aC, aD;
+uniform float uYear;
+uniform vec3 uLeaf[4];
+uniform vec3 uTrunk;
+varying vec3 vCol;
+void main() {
+  if (uYear < aD.x || uYear > aD.y) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); vCol = vec3(0.0); return; }
+  float H = aA.w;
+  vec3 p, n = normal;
+  if (aPart < 0.5) {                                  // trunk
+    p = vec3(position.xy * max(aC.y * H, 0.16), position.z * aB.y * H);
+  } else {                                            // crown
+    vec3 q = position * (aPart > 1.5 ? aD.z : 1.0);   // side clumps shrink towards the crown centre
+    float R = aB.w * H;
+    #ifdef CONIFER
+      float Z = (1.0 - aB.z) * H;
+      p = vec3(q.xy * R, aB.z * H + q.z * Z);
+    #else
+      float Z = aC.x * H;
+      p = vec3(q.xy * R, aB.z * H + q.z * Z);
+    #endif
+    n = normalize(vec3(n.xy / R, n.z / max(Z, 0.001)));
+  }
+  float c = cos(aB.x), s = sin(aB.x);
+  p.xy = vec2(c * p.x - s * p.y, s * p.x + c * p.y);
+  n.xy = vec2(c * n.x - s * n.y, s * n.x + c * n.y);
+  float light = 0.5 + 0.5 * max(dot(n, normalize(vec3(-0.35, 0.5, 0.8))), 0.0);
+  float ao = aPart < 0.5 ? 0.8 : 0.82 + 0.18 * clamp(p.z / H, 0.0, 1.0);
+  vec3 base = aPart < 0.5 ? uTrunk : uLeaf[int(clamp(aC.w, 0.0, 3.0) + 0.5)];
+  vCol = base * aC.z * light * ao;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(p + aA.xyz, 1.0);
+}`;
+const TREE_FRAG = /* glsl */`
+varying vec3 vCol;
+void main() { gl_FragColor = vec4(vCol, 1.0); }`;
+
+// Water surface: a small seamless noise texture slid along each point's flow vector (metres per second,
+// in world space). Two copies half a cycle apart are cross-faded so the pattern never visibly resets.
+// The texture is looked up in plain world coordinates and only OFFSET along the flow, so every ripple
+// travels the way the water does. (Rotating the lookup into a flow-aligned frame swirled the ripples in all
+// directions, because the rotation changes from place to place and gets multiplied by the distance from the
+// origin.) The elongated streaks come from averaging two samples along the current instead.
+const WATER_VERT = /* glsl */`
+attribute vec2 aFlow;
+attribute vec2 aYears;
+uniform float uLift;
+varying vec2 vXY, vFlow, vYears;
+void main() {
+  vXY = position.xy; vFlow = aFlow; vYears = aYears;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position + vec3(0.0, 0.0, uLift), 1.0);
+}`;
+const WATER_FRAG = /* glsl */`
+uniform sampler2D uNoise;
+uniform float uTime, uYear, uStrength;
+uniform vec3 uColor, uHi, uLo;
+varying vec2 vXY, vFlow, vYears;
+void main() {
+  if (uYear < vYears.x || uYear > vYears.y) discard;
+  float sp = length(vFlow);
+  float moving = smoothstep(0.02, 0.12, sp);                       // 0 = still water (pond), 1 = a current
+  vec2 dir = sp > 1e-4 ? vFlow / sp : vec2(1.0, 0.0);
+  // everywhere in a current moves at a clearly visible pace, so the whole river reads as flowing one way
+  float speed = mix(0.05, max(sp, 0.45), moving);
+  const float SCALE = 6.0;                                          // metres per texture repeat
+  const float CYCLE = 3.0;                                          // seconds per cross-fade cycle
+  vec2 uv = vXY / SCALE;
+  vec2 v = dir * speed / SCALE;                                     // texture units per second, along the current
+  vec2 along = dir * (1.3 / SCALE) * moving;                        // half-length of the streak
+  float t = uTime / CYCLE;
+  float p0 = fract(t), p1 = fract(t + 0.5);
+  float w0 = 1.0 - abs(2.0 * p0 - 1.0);
+  vec2 c0 = uv - v * CYCLE * p0;
+  vec2 c1 = uv - v * CYCLE * p1 + vec2(0.37, 0.61);
+  float n0 = 0.5 * (texture2D(uNoise, c0 - along).r + texture2D(uNoise, c0 + along).r);
+  float n1 = 0.5 * (texture2D(uNoise, c1 - along).r + texture2D(uNoise, c1 + along).r);
+  float n = mix(n1, n0, w0);
+  n = clamp((n - 0.5) * (1.0 + 0.8 * (1.0 - abs(2.0 * w0 - 1.0))) * (1.0 + 0.5 * moving) + 0.5, 0.0, 1.0);
+  float crest = smoothstep(0.56, 0.78, n);
+  float trough = 1.0 - smoothstep(0.22, 0.44, n);
+  float k = uStrength * (0.6 + 0.4 * clamp(sp, 0.0, 1.0));
+  vec3 col = mix(uColor, uHi, crest * k);
+  col = mix(col, uLo, trough * k * 0.55);
+  gl_FragColor = vec4(col, 1.0);
+}`;
+
+// Mist: soft, flat puffs lying over the high ground. Drift is computed on the GPU from the time uniform.
+const MIST_VERT = /* glsl */`
+attribute vec4 aP, aS, aV;
+uniform float uTime;
+varying vec2 vUv, vWorld;
+varying float vPhase;
+void main() {
+  float ph = aP.w;
+  vec3 off = vec3(sin(uTime * 0.045 + ph) * aV.x, cos(uTime * 0.035 + ph) * aV.y, sin(uTime * 0.04 + ph) * aV.z);
+  float rot = aS.z + sin(uTime * 0.02 + ph) * 0.035;
+  float c = cos(rot), s = sin(rot);
+  vec2 q = position.xy * aS.xy;
+  vec3 w = aP.xyz + off + vec3(c * q.x - s * q.y, s * q.x + c * q.y, 0.0);
+  vUv = position.xy; vWorld = w.xy; vPhase = ph;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(w, 1.0);
+}`;
+const MIST_FRAG = /* glsl */`
+uniform vec3 uColor;
+uniform float uOpacity;
+uniform vec4 uBounds;
+varying vec2 vUv, vWorld;
+varying float vPhase;
+void main() {
+  float wob = 1.0 + 0.16 * sin(vUv.x * 3.3 + vPhase * 2.0) * cos(vUv.y * 2.9 + vPhase);
+  float a = 1.0 - smoothstep(0.0, 1.0, length(vUv) * wob);
+  a *= a;
+  // fade out towards the edge of the mapped area so no haze ever shows outside it
+  float d = min(min(vWorld.x - uBounds.x, uBounds.z - vWorld.x), min(vWorld.y - uBounds.y, uBounds.w - vWorld.y));
+  a *= smoothstep(0.0, 140.0, d);
+  if (a < 0.004) discard;
+  gl_FragColor = vec4(uColor, a * uOpacity);
+}`;
+
+// Transport (roads, tracks, trails, railway): one material for the whole network. Every surface is
+// procedural, so there are no image files. The vertex stage hides anything outside its dates; the fragment
+// stage picks the road surface for the current year: dirt and mud -> cobbles -> tarmac.
+const ROAD_VERT = /* glsl */`
+attribute vec2 aUV;
+attribute vec4 aInfo;     // material, class, width (m), -
+attribute vec4 aSched;    // year it gets cobbles, year it gets tarmac, from year, to year
+uniform float uYear, uLift;
+varying vec2 vUV, vSched;
+varying vec4 vInfo;
+varying float vLit;
+void main() {
+  if (uYear < aSched.z || uYear > aSched.w) {
+    gl_Position = vec4(2.0, 2.0, 2.0, 1.0); vUV = vec2(0.0); vSched = vec2(0.0); vInfo = vec4(0.0); vLit = 0.0; return;
+  }
+  vUV = aUV; vInfo = aInfo; vSched = aSched.xy;
+  vLit = 0.5 + 0.5 * max(dot(normalize(normal), normalize(vec3(-0.35, 0.5, 0.8))), 0.0);
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position + vec3(0.0, 0.0, uLift), 1.0);
+}`;
+const ROAD_FRAG = /* glsl */`
+uniform sampler2D uNoise, uCobble;
+uniform float uYear, uWet;
+varying vec2 vUV, vSched;
+varying vec4 vInfo;
+varying float vLit;
+float band(float x, float w) { return exp(-x * x / (w * w)); }
+void main() {
+  float mat = vInfo.x, cls = vInfo.y;
+  vec2 m = vec2(vUV.x, vUV.y * 0.5 * vInfo.z);          // metres along the road, and across from its centre
+  vec3 col;
+  if (mat < 0.5) {                                      // ---- road surface
+    float stage = 0.0;
+    if (uYear >= vSched.x) stage = 1.0;
+    if (uYear >= vSched.y) stage = 2.0;
+    float n1 = texture2D(uNoise, m * 0.11).r;
+    float n2 = texture2D(uNoise, m * 0.47 + vec2(0.31, 0.17)).r;
+    float edge = smoothstep(0.78, 1.0, abs(vUV.y));
+    if (stage < 0.5) {                                  // dirt and mud
+      vec3 dirt = mix(vec3(0.52, 0.42, 0.30), vec3(0.64, 0.54, 0.40), n1);
+      vec3 mud = mix(vec3(0.25, 0.20, 0.14), vec3(0.35, 0.28, 0.20), n2);
+      float wet = uWet * (0.55 + 0.45 * step(1.5, cls));          // tracks and trails stay wetter
+      float mudAmt = smoothstep(0.42, 0.7, n1 * 0.75 + n2 * 0.45 + wet * 0.45 - 0.2);
+      col = mix(dirt, mud, mudAmt);
+      float rut = cls < 2.5 ? band(abs(m.y) - min(0.9, vInfo.z * 0.27), 0.2) : 0.0;     // two wheel ruts
+      col = mix(col, mud * 0.8, rut * 0.55);
+      float grass = (cls > 1.5 && cls < 2.5) ? smoothstep(0.55, 0.0, abs(m.y)) : 0.0;   // grass between a track's ruts
+      col = mix(col, vec3(0.44, 0.52, 0.30), grass * 0.5);
+      col = mix(col, vec3(0.42, 0.50, 0.28), edge * 0.5);
+    } else if (stage < 1.5) {                           // cobbles / setts
+      float c = texture2D(uCobble, m / 2.9).r;
+      col = mix(vec3(0.30, 0.28, 0.26), vec3(0.64, 0.61, 0.56), c) * (0.9 + 0.2 * n1);
+      col = mix(col, vec3(0.42, 0.48, 0.30), edge * 0.45);
+    } else {                                            // tarmac
+      col = vec3(0.26, 0.27, 0.29) + (texture2D(uNoise, m * 1.9).r - 0.5) * 0.05;
+      if (cls < 0.5) {                                  // main roads: edge lines, centre dashes from 1960
+        col = mix(col, vec3(0.80), band(abs(m.y) - vInfo.z * 0.43, 0.06) * 0.55);
+        float dash = step(fract(vUV.x / 9.0), 0.4) * step(1960.0, uYear);
+        col = mix(col, vec3(0.85), band(m.y, 0.07) * dash * 0.7);
+      }
+      col = mix(col, vec3(0.42, 0.48, 0.30), edge * 0.2);
+    }
+  } else if (mat < 1.5) {                               // ---- ballast top, with sleepers
+    float g = texture2D(uNoise, m * 0.9).r;
+    col = mix(vec3(0.38, 0.37, 0.34), vec3(0.52, 0.50, 0.46), g);
+    float sl = fract(vUV.x / 0.65);
+    float sleeper = smoothstep(0.10, 0.16, sl) * (1.0 - smoothstep(0.42, 0.48, sl));
+    col = mix(col, vec3(0.28, 0.20, 0.14), sleeper * (1.0 - smoothstep(1.05, 1.2, abs(m.y))) * 0.85);
+  } else if (mat < 2.5) {                               // ---- rails
+    col = vec3(0.40, 0.41, 0.43);
+  } else if (mat < 3.5) {                               // ---- road verge / skirt
+    col = vec3(0.30, 0.25, 0.18);
+  } else {                                              // ---- ballast slope
+    col = vec3(0.36, 0.35, 0.31) * (0.9 + 0.2 * texture2D(uNoise, m * 0.7).r);
+  }
+  gl_FragColor = vec4(col * vLit, 1.0);
+}`;
+
+// Seamless cobblestone texture: jittered cells with a dark mortar line between them (red channel).
+function makeCobbleTexture(size = 128, cells = 12) {
+  const rnd = mulberry32(31), pts = [], tone = [];
+  for (let j = 0; j < cells; j++) for (let i = 0; i < cells; i++) {
+    pts.push([(i + 0.15 + 0.7 * rnd()) / cells, (j + 0.15 + 0.7 * rnd()) / cells]);
+    tone.push(0.45 + 0.55 * rnd());
+  }
+  const data = new Uint8Array(size * size), smooth = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+    const px = (x + 0.5) / size, py = (y + 0.5) / size, ci = Math.floor(px * cells), cj = Math.floor(py * cells);
+    let d1 = 9, d2 = 9, k = 0;
+    for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
+      const ii = (ci + di + cells) % cells, jj = (cj + dj + cells) % cells, q = pts[jj * cells + ii];
+      const d = Math.hypot(q[0] + (ci + di - ii) / cells - px, q[1] + (cj + dj - jj) / cells - py);
+      if (d < d1) { d2 = d1; d1 = d; k = jj * cells + ii; } else if (d < d2) d2 = d;
+    }
+    data[y * size + x] = Math.round(255 * (0.1 + 0.9 * tone[k] * smooth(0.02, 0.2, (d2 - d1) * cells)));
+  }
+  const tex = new THREE.DataTexture(data, size, size, THREE.RedFormat, THREE.UnsignedByteType);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.minFilter = THREE.LinearMipmapLinearFilter; tex.magFilter = THREE.LinearFilter;
+  tex.generateMipmaps = true; tex.unpackAlignment = 1; tex.needsUpdate = true;
+  return tex;
+}
+
+// Seamless value-noise texture for the water ripples.
+function makeNoiseTexture(size = 128) {
+  const rnd = mulberry32(7);
+  const octaves = [[8, 0.5], [16, 0.3], [32, 0.2]].map(([cells, w]) => ({ cells, w, g: Float32Array.from({ length: cells * cells }, rnd) }));
+  const smooth = t => t * t * (3 - 2 * t);
+  const v = new Float32Array(size * size);
+  let lo = Infinity, hi = -Infinity;
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+    let sum = 0;
+    for (const { cells: c, w, g } of octaves) {
+      const fx = x / size * c, fy = y / size * c, x0 = Math.floor(fx), y0 = Math.floor(fy);
+      const tx = smooth(fx - x0), ty = smooth(fy - y0);
+      const a = g[(y0 % c) * c + x0 % c], b = g[(y0 % c) * c + (x0 + 1) % c];
+      const d = g[((y0 + 1) % c) * c + x0 % c], e = g[((y0 + 1) % c) * c + (x0 + 1) % c];
+      sum += w * ((a * (1 - tx) + b * tx) * (1 - ty) + (d * (1 - tx) + e * tx) * ty);
+    }
+    v[y * size + x] = sum; lo = Math.min(lo, sum); hi = Math.max(hi, sum);
+  }
+  const data = new Uint8Array(size * size);
+  for (let i = 0; i < data.length; i++) data[i] = Math.round((v[i] - lo) / (hi - lo) * 255);
+  const tex = new THREE.DataTexture(data, size, size, THREE.RedFormat, THREE.UnsignedByteType);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.minFilter = THREE.LinearMipmapLinearFilter; tex.magFilter = THREE.LinearFilter;
+  tex.generateMipmaps = true; tex.unpackAlignment = 1; tex.needsUpdate = true;
+  return tex;
+}
+
+// earcut-style adapter around Three's triangulator
+function triangulate(flat, holes) {
+  const pts = [];
+  for (let i = 0; i < flat.length; i += 2) pts.push(new THREE.Vector2(flat[i], flat[i + 1]));
+  const ends = [...holes, pts.length];
+  const faces = THREE.ShapeUtils.triangulateShape(pts.slice(0, ends[0]), holes.map((h, k) => pts.slice(h, ends[k + 1])));
+  const out = [];
+  for (const f of faces) out.push(f[0], f[1], f[2]);
+  return out;
+}
+
+// ============================================================ main
+async function start() {
+  const [demMeta, baseRaw, masterRaw, mapsCfgRaw, forestsRaw, eventsCfgRaw, roadsRaw] = await Promise.all([
+    getJson('tiles/meta.json', null),
+    getJson('base.geojson', { type: 'FeatureCollection', features: [] }),
+    getJson('buildings_master.geojson', null).then(m => m || getJson('buildings.geojson', null)),
+    getJson('maps.json', { maps: [] }),
+    getJsonFirst(FOREST_FILES, null),
+    getJson('events.json', { events: [] }),
+    getJson('roads.geojson', { type: 'FeatureCollection', features: [] }),
+  ]);
+
+  const demTiles = demMeta ? [BASE + LOCAL_DEM] : [GLOBAL_DEM];
+  const demMax = Math.min(demMeta ? demMeta.maxzoom : 15, TERRAIN_MAXZOOM);
+  const [W, S, E, N] = AREA;
+
+  // ---- local frame + terrain heights (shared by trees, water, mist). Start fetching straight away.
+  const frame = makeFrame(AREA_CENTRE);
+  const [lbW, lbS] = frame.toLocal(W, S), [lbE, lbN] = frame.toLocal(E, N);
+  const LOCAL_BOX = [lbW, lbS, lbE, lbN];
+  const heightfieldPromise = loadHeightfield().catch(err => { console.warn('Height field failed:', err); return null; });
+
+  async function loadHeightfield() {
+    const z = Math.max(demMeta ? demMeta.minzoom : 0, Math.min(demMax, TIER.heightZoom));
+    const px = 256 * 2 ** z;
+    const gx0 = Math.floor(mercX(W) * px) - 1, gx1 = Math.ceil(mercX(E) * px) + 1;
+    const gy0 = Math.floor(mercY(N) * px) - 1, gy1 = Math.ceil(mercY(S) * px) + 1;
+    const nx = gx1 - gx0 + 1, ny = gy1 - gy0 + 1;
+    const data = new Int16Array(nx * ny).fill(-32768);
+    const jobs = [];
+    for (let ty = Math.floor(gy0 / 256); ty <= Math.floor(gy1 / 256); ty++)
+      for (let tx = Math.floor(gx0 / 256); tx <= Math.floor(gx1 / 256); tx++)
+        jobs.push({ tx, ty, url: demTiles[0].replace('{z}', z).replace('{x}', tx).replace('{y}', ty) });
+    const blobs = await Promise.all(jobs.map(j => fetch(j.url).then(r => r.ok ? r.blob() : null).catch(() => null)));
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 256;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    let valid = 0;
+    for (let k = 0; k < jobs.length; k++) {
+      if (!blobs[k]) continue;
+      const bmp = await createImageBitmap(blobs[k], { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
+      if (bmp.width !== 256 || bmp.height !== 256) { bmp.close(); continue; }
+      ctx.clearRect(0, 0, 256, 256);
+      ctx.drawImage(bmp, 0, 0);
+      bmp.close();
+      const px4 = ctx.getImageData(0, 0, 256, 256).data;
+      const { tx, ty } = jobs[k];
+      for (let y = 0; y < 256; y++) {
+        const gy = ty * 256 + y;
+        if (gy < gy0 || gy > gy1) continue;
+        for (let x = 0; x < 256; x++) {
+          const gx = tx * 256 + x;
+          if (gx < gx0 || gx > gx1) continue;
+          const o = (y * 256 + x) * 4;
+          if (px4[o + 3] === 0) continue;                              // transparent = no data
+          const h = Math.round(terrariumM(px4[o], px4[o + 1], px4[o + 2]) * 10);
+          if (h > -32000 && h < 32000) { data[(gy - gy0) * nx + (gx - gx0)] = h; valid++; }
+        }
+      }
+    }
+    if (!valid) return null;
+    if (valid < data.length) {                                         // fill gaps with the mean height
+      let sum = 0; for (let i = 0; i < data.length; i++) if (data[i] !== -32768) sum += data[i];
+      const mean = Math.round(sum / valid);
+      for (let i = 0; i < data.length; i++) if (data[i] === -32768) data[i] = mean;
+    }
+    // MapLibre's terrain treats a DEM texel as sitting at its top-left corner (not its centre), so use the same
+    // convention; surfaces on top still get a slope-aware margin (tolerantHeight) because GPUs differ by a texel or so.
+    return new Heightfield({ x0: gx0 / px, y0: gy0 / px, dx: 1 / px, dy: 1 / px, nx, ny, data });
+  }
+
+  // ---- data preparation: keep only what touches the mapped area
+  const asFc = (raw, keep) => ({
+    type: 'FeatureCollection',
+    features: (raw && Array.isArray(raw.features) ? raw.features : []).filter(f => {
+      try { return f?.geometry && keep(f); } catch (_) { return false; }
+    }),
+  });
+  const overlapsArea = f => bboxesOverlap(geomBBox(f.geometry), AREA);
+
+  const base = asFc(baseRaw, overlapsArea);
+  const roads = asFc(roadsRaw, overlapsArea);
+  const forests = asFc(forestsRaw, overlapsArea);
+  // forests use the same from_year/to_year convention as buildings; make sure they are numbers (or null)
+  forests.features = forests.features.map(f => {
+    const p = f.properties || {};
+    return { ...f, properties: { ...p, from_year: toYear(p.from_year), to_year: toYear(p.to_year) } };
+  });
+
+  const mapsCfg = mapsCfgRaw && Array.isArray(mapsCfgRaw.maps) ? mapsCfgRaw : { maps: [] };
+  const eventsCfg = eventsCfgRaw && Array.isArray(eventsCfgRaw.events) ? eventsCfgRaw : { events: [] };
+
+  // Buildings: models are placed by centroid; everything else is clipped to the area so no footprint
+  // pokes outside it.
+  let master = null;
+  if (masterRaw) {
+    master = { type: 'FeatureCollection', features: [] };
+    for (const f of Array.isArray(masterRaw.features) ? masterRaw.features : []) {
+      try {
+        if (!f?.geometry) continue;
+        if (f.properties?.model) {
+          if (inBounds(centroid(f.geometry), AREA)) master.features.push(f);
+        } else {
+          const g = clipGeometryToBox(f.geometry, AREA);
+          if (g) master.features.push(g === f.geometry ? f : { ...f, geometry: g });
+        }
+      } catch (_) {}
+    }
+  }
+  const modelCandidates = master ? master.features.filter(f => f.properties?.model) : [];
+
+  // ---- date events: years at which visibility can change (buildings and forests share MODERN_FROM)
+  const dateEvents = new EventIndex();
+  base.features.forEach(f => dateEvents.addFeature(f.properties || {}));
+  roads.features.forEach(f => dateEvents.addFeature(f.properties || {}));
+  forests.features.forEach(f => dateEvents.addFeature(f.properties || {}, FOREST_UNDATED_FROM));
+  if (master) master.features.forEach(f => dateEvents.addFeature(f.properties || {}, MODERN_FROM));
+
+  // ---- style (static: every layer in its final order, so MapLibre never has to re-stack the terrain)
+  const slider = $('yearSlider'), yearEl = $('year');
+  const year = () => parseInt(slider.value, 10);
+  const y0 = year();
+
+  // Visible from from_year (or `undated` when there is none) up to and including to_year.
+  const dated = (y, undated = null) => [
+    ['<=', ['coalesce', ['get', 'from_year'], undated ?? -99999], y],
+    ['>=', ['coalesce', ['get', 'to_year'], 99999], y],
+  ];
+  const dateF = y => dated(y);
+  const buildingDateF = y => dated(y, MODERN_FROM);
+  const forestDateF = y => dated(y, FOREST_UNDATED_FROM);
+
+  const K = (kind, cls) => cls
+    ? ['all', ['==', ['get', 'kind'], kind], ['==', ['get', 'cls'], cls]]
+    : ['==', ['get', 'kind'], kind];
+  const zoomW = (a, b) => ['interpolate', ['linear'], ['zoom'], 12, a, 17, b];
+
+  const season0 = resolveSeason($('season').value);
+  const texVisible = $('texVis').checked ? 'visible' : 'none';
+  const baseDefs = [
+    { id: 'base-green', type: 'fill', kf: K('green'), paint: {
+        'fill-color': greenColour(season0),
+        'fill-opacity': 0.9, 'fill-outline-color': '#92aa79' } },
+    { id: 'base-wood', type: 'fill', kf: K('wood'), paint: { 'fill-color': '#bbd19e' } },
+    { id: 'base-water', type: 'fill', kf: K('water'), paint: { 'fill-color': '#a8cfe6' } },
+    { id: 'base-stream', type: 'line', kf: ['all', K('waterway'), ['!=', ['get', 'cls'], 'river']],
+      paint: { 'line-color': '#8fbbdc', 'line-width': zoomW(1, 3) } },
+    { id: 'base-river', type: 'line', kf: K('waterway', 'river'),
+      paint: { 'line-color': '#8fbbdc', 'line-width': zoomW(3, 16) } },
+  ];
+
+  const ROAD_LAYERS = [
+    { id: 'roads-rail',  kf: K('rail'),            paint: { 'line-color': '#626262', 'line-width': 2, 'line-dasharray': [3, 2], 'line-opacity': 0.95 } },
+    { id: 'roads-track', kf: K('road', 'track'),   paint: { 'line-color': '#a58a62', 'line-width': 2, 'line-dasharray': [2, 2], 'line-opacity': 0.95 } },
+    { id: 'roads-minor', kf: K('road', 'minor'),   paint: { 'line-color': '#d0b996', 'line-width': 4, 'line-opacity': 0.95 } },
+    { id: 'roads-major', kf: K('road', 'major'),   paint: { 'line-color': '#a87943', 'line-width': 6, 'line-opacity': 0.98 } },
+  ];
+  const ROAD_LAYER_IDS = ROAD_LAYERS.map(d => d.id);
+
+  const histMaps = (mapsCfg.maps || [])
+    .filter(m => m.tiles && m.from_year != null && m.to_year != null)
+    .sort((a, b) => a.from_year - b.from_year);
+  histMaps.forEach((m, i) => { m.layerId = `hist-map-${i}`; });
+
+  // Everything outside the area is covered by a solid black polygon with the area cut out of it.
+  const mask = { type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [
+    [[-180, -85], [180, -85], [180, 85], [-180, 85], [-180, -85]],
+    [[W, S], [W, N], [E, N], [E, S], [W, S]],
+  ] } };
+
+  const OSM = '© OpenStreetMap contributors, © OpenHistoricalMap contributors';
+  const sources = {
+    dem: { type: 'raster-dem', encoding: 'terrarium', tileSize: 256, tiles: demTiles, maxzoom: demMax,
+           bounds: DEM_BOUNDS, ...(demMeta ? { minzoom: demMeta.minzoom } : {}),
+           attribution: 'Terrain: Scottish Government LiDAR (OGL) / Mapzen' },
+    base:    { type: 'geojson', data: base,    maxzoom: 16, attribution: OSM },
+    roads:   { type: 'geojson', data: roads,   maxzoom: 16, attribution: OSM },
+    forests: { type: 'geojson', data: forests, maxzoom: 16 },
+    mask:    { type: 'geojson', data: { type: 'FeatureCollection', features: [mask] }, maxzoom: 14 },
+  };
+  if (master) sources['master-buildings'] = { type: 'geojson', data: master, maxzoom: 16, attribution: '© OpenStreetMap contributors, © OpenHistoricalMap' };
+  const histVisible = m => m.from_year <= y0 && y0 <= m.to_year;
+  histMaps.forEach(m => {
+    sources[m.layerId] = { type: 'raster', tiles: [absUrl(m.tiles)], tileSize: m.tileSize || 256,
+      minzoom: m.minzoom ?? 0, maxzoom: m.maxzoom ?? 17, bounds: m.bounds || padBounds(AREA, 0.0008),
+      attribution: m.attribution || 'Map: National Library of Scotland' };
+  });
+
+  // Order matters: all draped (terrain-hugging) layers first, ending with the black mask, then the 3D
+  // layers. That needs a single terrain pass; interleaving them would cost an extra pass per switch.
+  const layers = [
+    { id: 'bg', type: 'background', paint: { 'background-color': GREEN_TINT[season0] } },
+    ...baseDefs.flatMap(d => {
+      const layer = { id: d.id, type: d.type, source: 'base', filter: ['all', d.kf, ...dateF(y0)], paint: d.paint,
+        ...(d.type === 'line' ? { layout: { 'line-cap': 'butt', 'line-join': 'round' } } : {}) };
+      if (d.id === 'base-wood' && forests.features.length) layer.layout = { visibility: 'none' };
+      const grassTexture = { id: 'grass-texture', type: 'fill', source: 'base', minzoom: 14, layout: { visibility: texVisible },
+        filter: ['all', K('green'), ['!', ['in', ['get', 'cls'], ['literal', NO_GRASS_TEXTURE]]], ...dateF(y0)],
+        paint: { 'fill-pattern': `tex:grass:${season0}`, 'fill-opacity': fadeInFrom14(0.8) } };
+      const woodTexture = (id, kind, test) => ({ id, type: 'fill', source: 'forests', minzoom: 14, layout: { visibility: texVisible },
+        filter: ['all', ...forestDateF(y0), test], paint: { 'fill-pattern': `tex:${kind}:${season0}`, 'fill-opacity': fadeInFrom14(0.9) } });
+      if (d.id === 'base-green') return [layer, grassTexture];
+      return d.id === 'base-wood'
+        ? [layer,
+           { id: 'forest-floor', type: 'fill', source: 'forests', filter: ['all', ...forestDateF(y0)],
+             paint: { 'fill-color': forestFloorColour(season0), 'fill-opacity': 0.9 } },
+           woodTexture('forest-litter', 'litter', ['!=', ['get', 'tree_type'], 'conifer']),
+           woodTexture('forest-needles', 'needles', ['==', ['get', 'tree_type'], 'conifer'])]
+        : [layer];
+    }),
+    ...histMaps.map(m => ({ id: m.layerId, type: 'raster', source: m.layerId,
+      layout: { visibility: histVisible(m) ? 'visible' : 'none' },
+      paint: { 'raster-opacity': parseFloat($('mapOpacity').value), 'raster-fade-duration': 0 } })),
+    { id: 'hillshade-dem', type: 'hillshade', source: 'dem', paint: { 'hillshade-exaggeration': 0.35 } },
+    ...ROAD_LAYERS.map(d => ({ id: d.id, type: 'line', source: 'roads', filter: ['all', d.kf, ...dateF(y0)],
+      layout: { visibility: $('roadsVis').checked ? 'visible' : 'none', 'line-cap': 'round', 'line-join': 'round' }, paint: d.paint })),
+    ...(master ? [{ id: 'master-footprints', type: 'fill', source: 'master-buildings', filter: ['all', ...buildingDateF(y0)],
+      paint: { 'fill-color': '#000000', 'fill-opacity': 0.01 } }] : []),
+    { id: 'outside-mask', type: 'fill', source: 'mask', paint: { 'fill-color': '#000000', 'fill-opacity': 1 } },
+    ...(master ? [{ id: 'master-buildings-3d', type: 'fill-extrusion', source: 'master-buildings', filter: ['all', ...buildingDateF(y0)],
+      paint: {
+        'fill-extrusion-color': ['case', ['==', ['get', 'manual'], true], '#d98e5f', ['!=', ['get', 'from_year'], null], '#c9b8a0', '#b8b8b8'],
+        'fill-extrusion-height': ['+', ['get', 'min_h'], ['get', 'h']],
+        'fill-extrusion-base': ['get', 'min_h'],
+        'fill-extrusion-opacity': 0.95 } }] : []),
+  ];
+
+  // ---- map. No sky or fog: the canvas is transparent above the horizon and the page behind it is black.
+  const map = new maplibregl.Map({
+    container: 'map',
+    style: { version: 8, sources, layers, terrain: { source: 'dem', exaggeration: EXAGGERATION } },
+    center: AREA_CENTRE, zoom: 13.5, pitch: DEFAULT_PITCH, bearing: DEFAULT_BEARING,
+    minZoom: 12, maxZoom: 18.5, maxPitch: MAX_PITCH,
+    maxBounds: [[W, S], [E, N]],
+    fadeDuration: 0,
+    renderWorldCopies: false,
+    maxTileCacheSize: TIER.tileCache,
+    pixelRatio: Math.min(window.devicePixelRatio || 1, TIER.pixelRatio),
+    attributionControl: { compact: true },
+  });
+  map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }));
+  map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }));
+
+  // ============================================================ 3D content (one custom layer, one Three.js renderer)
+  const localToMerc = new THREE.Matrix4().makeTranslation(frame.ox, frame.oy, 0)
+    .multiply(new THREE.Matrix4().makeScale(frame.s0, -frame.s0, frame.s0));
+  const localScene = new THREE.Scene();
+  const waterGroup = new THREE.Group(), treeGroup = new THREE.Group(), mistGroup = new THREE.Group(), transportGroup = new THREE.Group();
+  localScene.add(waterGroup, transportGroup, treeGroup, mistGroup);
+
+  let hf = null;                                    // Heightfield (set once loaded)
+  let heightAt = () => 0;                           // (east, north) in metres -> ground height
+  const stats = { trees: 0, treeChunks: 0, treeCandidates: 0, thin: 1, waterTris: 0, mistPuffs: 0, transportKm: 0, transportTris: 0, bridges: 0, built: false };
+
+  let treesOn = $('treeVis').checked, waterOn = $('waterVis').checked, mistOn = $('mistVis').checked, roadsOn = $('roadsVis').checked;
+  let buildingModelsVisible = true;
+
+  // ---- models (GLB buildings), loaded lazily the first time their date range is reached
+  const modelItems = [], modelIds = [];
+  const modelState = new Map();
+  let modelOk = 0, modelFailed = 0, gltfLoaderPromise = null;
+  const rotX = new THREE.Matrix4().makeRotationX(Math.PI / 2);
+  const _proj = new THREE.Matrix4(), _l = new THREE.Matrix4(), _s = new THREE.Vector3();
+  const lastMatrix = new Float64Array(16);
+  let haveMatrix = false;
+  // MapLibre's custom-layer matrix (and queryTerrainElevation) measure height RELATIVE to the terrain
+  // height at the map centre (map.transform.elevation), not above sea level. Everything here stores
+  // absolute heights, so each frame we subtract the centre elevation once.
+  let centreElev = 0;
+
+  function itemMatrix(it, out = new THREE.Matrix4()) {
+    const mc = maplibregl.MercatorCoordinate.fromLngLat(it.lngLat, (it.z ?? 0) + it.dz - centreElev);
+    const s = mc.meterInMercatorCoordinateUnits();
+    return out.makeTranslation(mc.x, mc.y, mc.z).scale(_s.set(s, -s, s)).multiply(rotX);
+  }
+  const mPerPx = zoom => 78271.517 * Math.cos(AREA_CENTRE[1] * Math.PI / 180) / 2 ** zoom;
+
+  const sceneLayer = {
+    id: 'scene-3d', type: 'custom', renderingMode: '3d',
+    onAdd(m, gl) {
+      this.camera = new THREE.Camera();
+      this.renderer = new THREE.WebGLRenderer({ canvas: m.getCanvas(), context: gl });
+      this.renderer.autoClear = false;
+    },
+    render(gl, matrix) {
+      lastMatrix.set(matrix); haveMatrix = true;
+      centreElev = map.transform.elevation || 0;
+      const zoom = map.getZoom();
+      treeGroup.visible = treesOn && zoom >= TIER.treeMinZoom;
+      waterGroup.visible = waterOn && zoom >= TIER.waterMinZoom;
+      transportGroup.visible = roadsOn && zoom >= TIER.transportMinZoom;
+      mistGroup.visible = mistOn;
+      const drawWorld = [treeGroup, waterGroup, transportGroup, mistGroup].some(g => g.visible && g.children.length);
+      const drawModels = buildingModelsVisible && modelItems.some(it => it.visible);
+      if (!drawWorld && !drawModels) return;
+
+      const r = this.renderer;
+      _proj.fromArray(matrix);
+      r.resetState();                                     // also restores the full-canvas viewport
+      if (drawModels) {
+        for (const it of modelItems) {
+          if (!it.visible) continue;
+          this.camera.projectionMatrix.copy(_proj).multiply(itemMatrix(it, _l));
+          r.render(it.scene, this.camera);
+        }
+      }
+      if (drawWorld) {
+        Uni.uTime.value = performance.now() / 1000;
+        // lift flat surfaces (water, roads) a little more when zoomed out, where the terrain mesh is coarser
+        Uni.uLift.value = 0.08 + 0.3 * mPerPx(zoom);
+        localToMerc.elements[14] = -centreElev * frame.s0;
+        this.camera.projectionMatrix.copy(_proj).multiply(localToMerc);
+        r.render(localScene, this.camera);                // opaque trees/water first, then the transparent mist
+      }
+    },
+  };
+
+  // ---- materials
+  const noiseTexture = makeNoiseTexture();
+  const waterMaterial = new THREE.ShaderMaterial({
+    vertexShader: WATER_VERT, fragmentShader: WATER_FRAG, side: THREE.DoubleSide,
+    uniforms: { uNoise: { value: noiseTexture }, uTime: Uni.uTime, uYear: Uni.uYear, uLift: Uni.uLift, uStrength: waterStrength,
+                uColor: { value: waterColour }, uHi: { value: waterHi }, uLo: { value: waterLo } },
+  });
+  const roadMaterial = new THREE.ShaderMaterial({
+    vertexShader: ROAD_VERT, fragmentShader: ROAD_FRAG, side: THREE.DoubleSide,
+    uniforms: { uYear: Uni.uYear, uLift: Uni.uLift, uWet: Uni.uWet, uNoise: { value: noiseTexture }, uCobble: { value: makeCobbleTexture() } },
+  });
+  const treeUniforms = leaf => ({ uYear: Uni.uYear, uLeaf: { value: leaf }, uTrunk: { value: trunkRGB } });
+  const treeMaterials = [
+    new THREE.ShaderMaterial({ vertexShader: TREE_VERT, fragmentShader: TREE_FRAG, uniforms: treeUniforms(leafBroad) }),
+    new THREE.ShaderMaterial({ vertexShader: TREE_VERT, fragmentShader: TREE_FRAG, uniforms: treeUniforms(leafConif), defines: { CONIFER: '' } }),
+  ];
+  const mistBounds = new THREE.Vector4(lbW, lbS, lbE, lbN);
+  const mistMaterial = new THREE.ShaderMaterial({
+    vertexShader: MIST_VERT, fragmentShader: MIST_FRAG, transparent: true, depthWrite: false, depthTest: true, side: THREE.DoubleSide,
+    uniforms: { uTime: Uni.uTime, uColor: { value: new THREE.Vector3(...rgb('#f1f5f6')) }, uOpacity: { value: 0.42 }, uBounds: { value: mistBounds } },
+  });
+
+  // ---- seasons
+  let currentSeason = 'summer';
+  function applySeason(value) {
+    currentSeason = resolveSeason(value);
+    const w = WATER_SEASONS[currentSeason], t = TREE_PALETTES[currentSeason];
+    // draped map layers
+    if (map.getLayer('base-water')) map.setPaintProperty('base-water', 'fill-color', w.water);
+    const line = mixHex(w.water, w.bed, 0.25);
+    for (const id of ['base-stream', 'base-river']) if (map.getLayer(id)) map.setPaintProperty(id, 'line-color', line);
+    // GPU materials (uniform updates only)
+    for (let i = 0; i < 4; i++) {
+      leafBroad[i].set(...rgb(t.broadleaf[i] || t.broadleaf[0]));
+      leafConif[i].set(...rgb(t.conifer[i] || t.conifer[0]));
+    }
+    // ground cover: floor and grass colours + the matching texture for the season
+    if (map.getLayer('bg')) map.setPaintProperty('bg', 'background-color', GREEN_TINT[currentSeason]);
+    if (map.getLayer('base-green')) map.setPaintProperty('base-green', 'fill-color', greenColour(currentSeason));
+    if (map.getLayer('forest-floor')) map.setPaintProperty('forest-floor', 'fill-color', forestFloorColour(currentSeason));
+    for (const [id, kind] of [['grass-texture', 'grass'], ['forest-litter', 'litter'], ['forest-needles', 'needles']])
+      if (map.getLayer(id)) map.setPaintProperty(id, 'fill-pattern', `tex:${kind}:${currentSeason}`);
+    waterColour.set(...rgb(w.water)); waterHi.set(...rgb(w.surface)); waterLo.set(...rgb(w.bed));
+    waterStrength.value = w.ripple * 2;
+    Uni.uWet.value = { spring: 0.6, summer: 0.2, autumn: 0.7, winter: 1.0 }[currentSeason];
+    $('seasonResolved').textContent = `(${currentSeason})`;
+    map.triggerRepaint();
+  }
+  applySeason('auto');                                 // sensible uniforms before the first frame
+  $('season').addEventListener('change', e => applySeason(e.target.value));
+
+  // ---- build water, trees and mist once the terrain heights are known
+  const sceneParts = { mist: null };
+  async function buildSceneContent() {
+    hf = await heightfieldPromise;
+    if (!hf) {                                        // fallback: sample the map's own terrain at home view
+      statusEl.textContent = 'Sampling terrain…';
+      await new Promise(r => map.once('idle', r));
+      const cell = 25 * frame.s0;
+      const x0 = mercX(W), y0m = mercY(N);
+      const nx = Math.ceil((mercX(E) - x0) / cell) + 1, ny = Math.ceil((mercY(S) - y0m) / cell) + 1;
+      const data = new Int16Array(nx * ny);
+      for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+        const x = x0 + i * cell, y = y0m + j * cell;
+        const z = map.queryTerrainElevation([x * 360 - 180, Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180 / Math.PI]);
+        data[j * nx + i] = Math.round((Number.isFinite(z) ? z : 0) * 10);
+      }
+      hf = new Heightfield({ x0, y0: y0m, dx: cell, dy: cell, nx, ny, data });
+    }
+    heightAt = (e, n) => hf.sampleMerc(frame.ox + e * frame.s0, frame.oy - n * frame.s0);
+    refreshModelHeights();
+    await tick();
+
+    // water surface
+    statusEl.textContent = 'Building water…';
+    const waterFeatures = base.features.filter(f => f.properties?.kind === 'water' || f.properties?.kind === 'waterway');
+    const w = waterFeatures.length ? buildWater(waterFeatures, { frame, box: AREA, heightAt, triangulate,
+      maxEdge: TIER.waterMaxEdge, speed: FLOW_SPEED, reverse: FLOW_REVERSE }) : null;
+    if (w) {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(w.position, 3));
+      g.setAttribute('aFlow', new THREE.BufferAttribute(w.flow, 2));
+      g.setAttribute('aYears', new THREE.BufferAttribute(w.years, 2));
+      g.setIndex(new THREE.BufferAttribute(w.index, 1));
+      const mesh = new THREE.Mesh(g, waterMaterial);
+      mesh.frustumCulled = false;
+      waterGroup.add(mesh);
+      stats.waterTris = w.triangleCount;
+    }
+    await tick();
+
+    // roads, tracks, trails and the railway: terrain-following ribbons, chunked by map cell
+    const transportFeatures = roads.features.filter(f => transportClass(f.properties || {}));
+    if (transportFeatures.length) {
+      statusEl.textContent = 'Laying roads and rails…';
+      const tr = buildTransport(transportFeatures, { frame, box: AREA, heightAt, waterTest: makeWaterTest(waterFeatures, frame, AREA), step: TIER.transportStep });
+      if (tr) {
+        const attrs = {
+          position: new THREE.BufferAttribute(tr.position, 3), normal: new THREE.BufferAttribute(tr.normal, 3),
+          aUV: new THREE.BufferAttribute(tr.uv, 2), aInfo: new THREE.BufferAttribute(tr.info, 4), aSched: new THREE.BufferAttribute(tr.sched, 4),
+        };
+        for (const ch of chunkTriangles(tr.position, tr.index, 300)) {
+          const g = new THREE.BufferGeometry();
+          for (const [k, a] of Object.entries(attrs)) g.setAttribute(k, a);       // vertex buffers are shared, only the index differs
+          g.setIndex(new THREE.BufferAttribute(ch.index, 1));
+          const [x0, y0c, z0, x1, y1, z1] = ch.bounds;
+          g.boundingSphere = new THREE.Sphere(new THREE.Vector3((x0 + x1) / 2, (y0c + y1) / 2, (z0 + z1) / 2), Math.hypot(x1 - x0, y1 - y0c, z1 - z0) / 2 + 1);
+          transportGroup.add(new THREE.Mesh(g, roadMaterial));
+        }
+        Object.assign(stats, { transportKm: tr.stats.length / 1000, transportTris: tr.triangleCount, bridges: tr.stats.bridges });
+        syncRoads2D();                                // the flat map lines now hand over to the 3D roads when zoomed in
+      }
+    }
+    await tick();
+
+    // trees: chunked instances, so off-screen chunks are culled and a chunk is one draw call per tree type
+    if (forests.features.length) {
+      statusEl.textContent = 'Planting trees…';
+      const trees = generateTrees(forests, AREA, { maxTrees: TIER.maxTrees, undatedFrom: FOREST_UNDATED_FROM ?? -99999,
+        clearance: transportFeatures.length ? makeCorridors(transportFeatures, AREA) : null });   // no trees on roads/rails while they exist
+      const loc = localiseTrees(trees, frame, heightAt);
+      const meshes = buildTreeMeshes();
+      const shared = [meshes.broadleaf, meshes.conifer].map(m => ({
+        position: new THREE.BufferAttribute(m.position, 3), normal: new THREE.BufferAttribute(m.normal, 3), part: new THREE.BufferAttribute(m.part, 1) }));
+      const CELL = 300, cells = new Map();
+      for (let i = 0; i < trees.count; i++) {
+        const key = Math.floor((loc.e[i] - lbW) / CELL) * 1000 + Math.floor((loc.n[i] - lbS) / CELL);
+        let c = cells.get(key);
+        if (!c) cells.set(key, c = [[], []]);
+        c[trees.kind[i]].push(i);
+      }
+      for (const lists of cells.values()) for (const kind of [0, 1]) {
+        if (!lists[kind].length) continue;
+        const pk = packTreeChunk(trees, loc, lists[kind], kind);
+        const g = new THREE.InstancedBufferGeometry();
+        g.setAttribute('position', shared[kind].position);
+        g.setAttribute('normal', shared[kind].normal);
+        g.setAttribute('aPart', shared[kind].part);
+        for (const [name, arr] of [['aA', pk.A], ['aB', pk.B], ['aC', pk.C], ['aD', pk.D]]) g.setAttribute(name, new THREE.InstancedBufferAttribute(arr, 4));
+        g.instanceCount = pk.count;
+        const [x0, y0c, z0, x1, y1, z1] = pk.bounds;
+        g.boundingSphere = new THREE.Sphere(new THREE.Vector3((x0 + x1) / 2, (y0c + y1) / 2, (z0 + z1) / 2), Math.hypot(x1 - x0, y1 - y0c, z1 - z0) / 2 + 1);
+        treeGroup.add(new THREE.Mesh(g, treeMaterials[kind]));
+        stats.treeChunks++;
+      }
+      Object.assign(stats, { trees: trees.count, treeCandidates: trees.candidates, thin: trees.thin });
+    }
+    await tick();
+
+    rebuildMist();
+    stats.built = true;
+    updateStatus();
+    syncAnim();
+    map.triggerRepaint();
+  }
+
+  function rebuildMist() {
+    if (sceneParts.mist) {
+      mistGroup.remove(sceneParts.mist);
+      sceneParts.mist.geometry.dispose();
+      sceneParts.mist = null;
+    }
+    stats.mistPuffs = 0;
+    const m = hf && planMist({ bounds: LOCAL_BOX, heightAt, minElevation: Number($('mistHeight').value), maxPuffs: TIER.mistPuffs });
+    if (m) {
+      const g = new THREE.InstancedBufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(new Float32Array([-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0]), 3));
+      g.setIndex([0, 1, 2, 0, 2, 3]);
+      for (const [name, arr] of [['aP', m.P], ['aS', m.S], ['aV', m.V]]) g.setAttribute(name, new THREE.InstancedBufferAttribute(arr, 4));
+      g.instanceCount = m.count;
+      const mesh = new THREE.Mesh(g, mistMaterial);
+      mesh.frustumCulled = false;
+      mesh.renderOrder = 10;
+      mistGroup.add(mesh);
+      sceneParts.mist = mesh;
+      stats.mistPuffs = m.count;
+    }
+    syncAnim();
+    map.triggerRepaint();
+  }
+
+  // ---- animation: repaint at a low fixed rate only while something animated is on screen
+  let animTimer = 0, animFps = 0, animTarget = TIER.animFps;
+  const waterShown = () => waterOn && waterGroup.children.length > 0 && map.getZoom() >= TIER.waterMinZoom;
+  function wantedFps() {
+    if (document.hidden) return 0;
+    if (waterShown()) return animTarget;
+    return mistOn && sceneParts.mist ? MIST_FPS : 0;
+  }
+  function syncAnim() {
+    const fps = wantedFps();
+    if (fps === animFps) return;
+    animFps = fps;
+    clearInterval(animTimer); animTimer = 0;
+    if (fps) animTimer = setInterval(() => map.triggerRepaint(), 1000 / fps);
+  }
+  document.addEventListener('visibilitychange', syncAnim);
+  map.on('zoomend', syncAnim);
+
+  // ---- models
+  // Model heights are stored as ABSOLUTE metres. The displayed terrain (queryTerrainElevation + the
+  // centre elevation) is preferred as it matches the LiDAR detail at the current zoom; the height
+  // field is the fallback (e.g. above the DEM's maximum zoom, where MapLibre cannot answer).
+  function refreshModelHeights() {
+    const canQuery = Math.floor(map.getZoom()) <= demMax && map.transform.elevation != null;
+    let changed = false;
+    for (const it of modelItems) {
+      let z = null;
+      if (canQuery) {
+        const q = map.queryTerrainElevation(it.lngLat);
+        if (Number.isFinite(q)) z = q + map.transform.elevation;
+      }
+      if (z == null && it.z == null && hf) z = hf.sampleMerc(mercX(it.lngLat[0]), mercY(it.lngLat[1]));
+      if (z != null && Math.abs((it.z ?? -1e9) - z) > 0.05) { it.z = z; changed = true; }
+    }
+    if (changed) map.triggerRepaint();
+  }
+  let demDirty = false;
+  map.on('sourcedata', e => { if (e.sourceId === 'dem' && e.tile) demDirty = true; });
+  map.on('idle', () => { if (demDirty) { demDirty = false; refreshModelHeights(); } });
+  map.on('moveend', refreshModelHeights);
+
+  function updateModelVisibility() {
+    const y = year();
+    modelItems.forEach(it => { it.visible = (it.from ?? MODERN_FROM) <= y && y <= (it.to ?? 99999); });
+    map.triggerRepaint();
+  }
+
+  async function ensureModels() {
+    const y = year();
+    const wanted = modelCandidates.filter(f => {
+      const p = f.properties;
+      return !modelState.has(f) && (p.from_year ?? MODERN_FROM) <= y && y <= (p.to_year ?? 99999);
+    });
+    if (!wanted.length) return;
+    wanted.forEach(f => modelState.set(f, 'loading'));
+    let loader;
+    try {
+      gltfLoaderPromise ||= import('three/addons/loaders/GLTFLoader.js').then(m => new m.GLTFLoader());
+      loader = await gltfLoaderPromise;
+    } catch (err) {
+      console.warn('GLTFLoader could not be loaded; keeping the extruded boxes:', err);
+      wanted.forEach(f => modelState.set(f, 'failed')); modelFailed += wanted.length; updateStatus();
+      return;
+    }
+    await Promise.all(wanted.map(async f => {
+      const p = f.properties;
+      try {
+        const obj = (await loader.loadAsync(absUrl(p.model))).scene;
+        obj.scale.setScalar(Number(p.model_scale) || 1);
+        obj.rotation.y = -(Number(p.model_rot) || 0) * Math.PI / 180;
+        const scene = new THREE.Scene();
+        scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8a8a, 1.6));
+        const sun = new THREE.DirectionalLight(0xffffff, 1.8);
+        sun.position.set(-30, 60, 40);
+        scene.add(sun, obj);
+        scene.updateMatrixWorld(true);
+        modelItems.push({ id: p.id, lngLat: centroid(f.geometry), dz: Number(p.model_dz) || 0, scene,
+                          from: p.from_year, to: p.to_year, visible: false, props: p });
+        modelIds.push(p.id);
+        modelState.set(f, 'ok'); modelOk++;
+      } catch (err) {
+        modelState.set(f, 'failed'); modelFailed++;
+        console.warn(`Model failed for ${p.id} (${p.model}); keeping the extruded box:`, err);
+      }
+    }));
+    refreshModelHeights();
+    applyFilters(true);                               // hide the boxes of models that loaded
+    updateStatus();
+  }
+
+  // ============================================================ date filtering
+  let lastBucket = -1, lastApplyMs = 0;
+
+  function applyFilters(force) {
+    const y = year();
+    const b = dateEvents.bucket(y);
+    if (!force && b === lastBucket) return;
+    lastBucket = b;
+    const df = dateF(y);
+    baseDefs.forEach(d => map.getLayer(d.id) && map.setFilter(d.id, ['all', d.kf, ...df]));
+    ROAD_LAYERS.forEach(d => map.getLayer(d.id) && map.setFilter(d.id, ['all', d.kf, ...df]));
+    // forests: same rule as buildings. (The trees themselves are filtered on the GPU by Uni.uYear.)
+    if (map.getLayer('forest-floor')) map.setFilter('forest-floor', ['all', ...forestDateF(y)]);
+    if (map.getLayer('grass-texture')) map.setFilter('grass-texture', ['all', K('green'), ['!', ['in', ['get', 'cls'], ['literal', NO_GRASS_TEXTURE]]], ...df]);
+    if (map.getLayer('forest-litter')) map.setFilter('forest-litter', ['all', ...forestDateF(y), ['!=', ['get', 'tree_type'], 'conifer']]);
+    if (map.getLayer('forest-needles')) map.setFilter('forest-needles', ['all', ...forestDateF(y), ['==', ['get', 'tree_type'], 'conifer']]);
+    if (map.getLayer('master-buildings-3d')) {
+      const mdf = buildingDateF(y);
+      map.setFilter('master-footprints', ['all', ...mdf]);
+      map.setFilter('master-buildings-3d',
+        modelIds.length ? ['all', ...mdf, ['!', ['in', ['get', 'id'], ['literal', modelIds]]]] : ['all', ...mdf]);
+    }
+    updateModelVisibility();
+  }
+
+  // ============================================================ historic maps
+  function updateHistoricMaps() {
+    const y = year(), active = [];
+    histMaps.forEach(m => {
+      const on = m.from_year <= y && y <= m.to_year;
+      map.setLayoutProperty(m.layerId, 'visibility', on ? 'visible' : 'none');
+      if (on) active.push(m.name || m.tiles);
+    });
+    $('activeMaps').textContent = histMaps.length
+      ? (active.length ? 'Map: ' + active.join('; ') : 'No historic map for this year') : '';
+  }
+  $('mapOpacity').addEventListener('input', e =>
+    histMaps.forEach(m => map.setPaintProperty(m.layerId, 'raster-opacity', parseFloat(e.target.value))));
+
+  // ============================================================ year slider
+  function onYearChange(force) {
+    const t0 = performance.now();
+    Uni.uYear.value = year();                         // trees + water: pure GPU, takes effect next frame
+    applyFilters(force);
+    updateHistoricMaps();
+    renderEvents();
+    ensureModels();
+    map.triggerRepaint();
+    lastApplyMs = performance.now() - t0;
+  }
+
+  let pending = null;
+  slider.addEventListener('input', () => {
+    yearEl.textContent = slider.value;
+    Uni.uYear.value = year();
+    map.triggerRepaint();
+    if (!pending) pending = setTimeout(() => { pending = null; onYearChange(); }, 100);
+  });
+  slider.addEventListener('change', () => { clearTimeout(pending); pending = null; onYearChange(); });
+
+  // ============================================================ toggles
+  $('bldVis').addEventListener('change', e => {
+    buildingModelsVisible = e.target.checked;
+    const v = buildingModelsVisible ? 'visible' : 'none';
+    ['master-buildings-3d', 'master-footprints'].forEach(id => map.getLayer(id) && map.setLayoutProperty(id, 'visibility', v));
+    map.triggerRepaint();
+  });
+  $('texVis').addEventListener('change', e => {
+    const v = e.target.checked ? 'visible' : 'none';
+    ['grass-texture', 'forest-litter', 'forest-needles'].forEach(id => map.getLayer(id) && map.setLayoutProperty(id, 'visibility', v));
+  });
+  // ground textures are drawn the first time a layer asks for one (only the current season is ever made)
+  map.on('styleimagemissing', e => {
+    const m = /^tex:(grass|litter|needles):(spring|summer|autumn|winter)$/.exec(e.id);
+    if (m && !map.hasImage(e.id)) map.addImage(e.id, drawPattern(m[1], m[2]), { pixelRatio: 1 });
+  });
+  $('treeVis').addEventListener('change', e => { treesOn = e.target.checked; map.triggerRepaint(); });
+  $('waterVis').addEventListener('change', e => { waterOn = e.target.checked; syncAnim(); map.triggerRepaint(); });
+  $('mistVis').addEventListener('change', e => { mistOn = e.target.checked; syncAnim(); map.triggerRepaint(); });
+  // The flat road lines stay in the map for popups and for zoomed-out views, but fade out (to a hit-test-only
+  // 1% opacity) once the 3D roads take over.
+  function syncRoads2D() {
+    ROAD_LAYERS.forEach(d => {
+      if (!map.getLayer(d.id)) return;
+      const base = d.paint['line-opacity'] ?? 0.95, z = TIER.transportMinZoom;
+      map.setPaintProperty(d.id, 'line-opacity', stats.transportTris
+        ? ['interpolate', ['linear'], ['zoom'], z, base, z + 0.6, 0.01] : base);
+      map.setLayoutProperty(d.id, 'visibility', roadsOn ? 'visible' : 'none');
+    });
+  }
+  $('roadsVis').addEventListener('change', () => { roadsOn = $('roadsVis').checked; syncRoads2D(); map.triggerRepaint(); });
+  let mistTimer = null;
+  $('mistHeight').addEventListener('input', e => {
+    $('mistHeightValue').textContent = `${e.target.value} m`;
+    clearTimeout(mistTimer);
+    mistTimer = setTimeout(() => stats.built && rebuildMist(), 120);
+  });
+  $('quality').value = new URLSearchParams(location.search).get('quality') in TIERS ? new URLSearchParams(location.search).get('quality') : 'auto';
+  $('quality').addEventListener('change', e => {
+    const p = new URLSearchParams(location.search);
+    if (e.target.value === 'auto') p.delete('quality'); else p.set('quality', e.target.value);
+    location.search = p.toString();                   // the quality tier is applied at startup
+  });
+
+  // ============================================================ events panel
+  const eventList = (eventsCfg.events || [])
+    .filter(e => e.title && e.from_year != null)
+    .map((e, i) => ({ ...e, _i: i, to: e.to_year ?? e.from_year }))
+    .sort((a, b) => a.from_year - b.from_year || String(a.title).localeCompare(String(b.title)));
+
+  const evPanel = $('events');
+  let lastEvKey = null, evHeader = null, evBody = null;
+  if (eventList.length) {
+    evHeader = document.createElement('h3');
+    evBody = document.createElement('div');
+    evPanel.append(evHeader, evBody);
+    evPanel.hidden = false;
+  }
+
+  function renderEvents() {
+    if (!eventList.length) return;
+    const y = year();
+    evHeader.textContent = `Events in ${y}`;
+    const active = eventList.filter(e => e.from_year <= y && y <= e.to);
+    const key = active.map(e => e._i).join(',');
+    if (key === lastEvKey) return;
+    lastEvKey = key;
+    evBody.replaceChildren();
+    if (!active.length) {
+      const none = document.createElement('div');
+      none.className = 'ev-none';
+      none.textContent = 'Nothing recorded for this year.';
+      evBody.append(none);
+      return;
+    }
+    active.forEach(e => {
+      const d = document.createElement('div');
+      d.className = 'ev';
+      const title = document.createElement('b');
+      title.textContent = e.title;
+      const when = document.createElement('small');
+      when.textContent = e.to === e.from_year ? `  ${e.from_year}` : `  ${e.from_year}–${e.to}`;
+      d.append(title, when);
+      if (e.text) { const t = document.createElement('div'); t.textContent = e.text; d.append(t); }
+      if (e.image) {
+        const img = document.createElement('img');
+        img.src = e.image; img.alt = e.image_caption || e.title; img.loading = 'lazy';
+        img.onerror = () => img.remove();
+        d.append(img);
+        if (e.image_caption) { const c = document.createElement('small'); c.textContent = e.image_caption; d.append(c); }
+      }
+      if (e.lon != null && e.lat != null && inBounds([e.lon, e.lat], AREA)) {
+        const b = document.createElement('button');
+        b.textContent = 'Show on map';
+        b.onclick = () => map.flyTo({ center: [e.lon, e.lat], zoom: e.zoom ?? 16.5, pitch: 55, duration: 2500 });
+        d.append(b);
+      }
+      evBody.append(d);
+    });
+  }
+
+  // ============================================================ default view + idle reset
+  let HOME = null, idleTimer = null, popup = null, lastIdleReset = 0;
+
+  function goHome() {
+    if (popup) { popup.remove(); popup = null; }
+    if (HOME) map.flyTo({ ...HOME, duration: 4000, essential: true });
+    if (IDLE_RESETS_YEAR) { slider.value = DEFAULT_YEAR; yearEl.textContent = DEFAULT_YEAR; onYearChange(); }
+  }
+  function resetIdle() {
+    const now = performance.now();
+    if (idleTimer && now - lastIdleReset < 250) return;           // pointermove fires very often
+    lastIdleReset = now;
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(goHome, IDLE_MS);
+  }
+  ['pointerdown', 'pointermove', 'wheel', 'keydown', 'touchstart'].forEach(ev => window.addEventListener(ev, resetIdle, { passive: true }));
+
+  // ============================================================ popups / picking
+  const PICK = ['master-buildings-3d', 'master-footprints'];
+  const row = (k, v) => v === undefined || v === null || v === 'null' ? '' : `<div><b>${k}</b> ${esc(v)}</div>`;
+
+  function showPopup(lngLat, html) {
+    if (popup) popup.remove();
+    popup = new maplibregl.Popup({ maxWidth: '260px' }).setLngLat(lngLat)
+      .setHTML(`<div style="font:12px system-ui">${html}</div>`).addTo(map);
+  }
+  const years = p => row('years', `${p.from_year ?? '?'} – ${p.to_year ?? 'present'}`);
+  const buildingHtml = p =>
+    row('id', p.id) + row('name', p.name) + row('type', p.btype) + years(p) +
+    row('height', p.h != null ? `${p.h} m${p.h_src ? ` (${p.h_src})` : ''}` : null) +
+    row('dates from', p.date_src) + row('model', p.model) + row('source', p.src) + row('notes', p.notes);
+  const forestHtml = p =>
+    '<b>Forest</b>' + row('id', p.id) + row('name', p.name) + row('trees', p.tree_type) +
+    row('density', p.density ? `${p.density}/ha` : null) + years(p) +
+    row('dates from', p.date_src) + row('source', p.src) + row('notes', p.notes);
+  const roadHtml = p =>
+    '<b>Road / route</b>' + row('id', p.id) + row('name', p.name) + row('type', p.road_type || p.kind) +
+    row('class', p.road_class || p.cls) + row('surface', p.surface) + years(p) +
+    row('dates from', p.date_src) + row('documented by', p.documented_by) + row('source', p.src) + row('notes', p.notes);
+
+  map.on('click', e => {
+    if (haveMatrix && modelItems.length) {                          // 1. 3D models
+      const cv = map.getCanvas();
+      const hit = pickModelHit(THREE, modelItems, new THREE.Matrix4().fromArray(lastMatrix), itemMatrix,
+        (e.point.x / cv.clientWidth) * 2 - 1, 1 - (e.point.y / cv.clientHeight) * 2);
+      if (hit) { showPopup(e.lngLat, buildingHtml(hit.props)); return; }
+    }
+    const f = map.queryRenderedFeatures(e.point, { layers: PICK.filter(id => map.getLayer(id)) })[0];   // 2. buildings
+    if (f) { showPopup(e.lngLat, buildingHtml(f.properties)); return; }
+    if (map.getLayer('forest-floor')) {                             // 3. forests
+      const ff = map.queryRenderedFeatures(e.point, { layers: ['forest-floor'] })[0];
+      if (ff) { showPopup(e.lngLat, forestHtml(ff.properties)); return; }
+    }
+    const road = map.queryRenderedFeatures(e.point, { layers: ROAD_LAYER_IDS.filter(id => map.getLayer(id)) })[0];   // 4. roads
+    if (road) showPopup(e.lngLat, roadHtml(road.properties));
+  });
+
+  // hover cursor: one query per animation frame, only when no button is held (not while dragging)
+  let hoverPoint = null, hoverQueued = false;
+  map.on('mousemove', e => {
+    if (e.originalEvent.buttons) return;
+    hoverPoint = e.point;
+    if (hoverQueued) return;
+    hoverQueued = true;
+    requestAnimationFrame(() => {
+      hoverQueued = false;
+      const layers = [...PICK, 'forest-floor', ...ROAD_LAYER_IDS].filter(id => map.getLayer(id));
+      map.getCanvas().style.cursor = layers.length && map.queryRenderedFeatures(hoverPoint, { layers }).length ? 'pointer' : '';
+    });
+  });
+
+  map.on('error', e => console.warn('Map error:', e && e.error && e.error.message));
+
+  // ============================================================ status + performance readout
+  function updateStatus() {
+    statusEl.textContent =
+      `Terrain: ${demMeta ? `LiDAR DTM (z${demMeta.minzoom}–${demMax})` : 'global DEM (~10–30 m)'}. ` +
+      `${base.features.length} base features. ` +
+      (master ? `${master.features.length} buildings` +
+        (modelOk || modelFailed ? ` (${modelOk} model${modelOk === 1 ? '' : 's'}${modelFailed ? `, ${modelFailed} failed` : ''}). ` : '. ')
+        : 'No buildings file. ') +
+      (forests.features.length
+        ? `${forests.features.length} forests` + (stats.built ? ` (${stats.trees.toLocaleString()} trees${stats.thin < 1 ? ', thinned' : ''}). ` : '. ')
+        : 'No forest polygons loaded. ') +
+      `${roads.features.length} road/rail features` + (stats.built && stats.transportTris ? ` (${stats.transportKm.toFixed(1)} km as 3D, ${stats.transportTris.toLocaleString()} triangles${stats.bridges ? `, ${stats.bridges} bridge${stats.bridges === 1 ? '' : 's'}` : ''}). ` : '. ') +
+      (eventList.length ? `${eventList.length} events. ` : '') +
+      (histMaps.length ? `${histMaps.length} historic map(s).` : 'No maps.json.') +
+      (base.features.length ? '' : ' (Run fetch_base_data.py for water, roads and woods.)');
+  }
+
+  let frames = 0;
+  map.on('render', () => frames++);
+  setInterval(() => {
+    // if the device cannot keep up with the water animation, ease its frame rate down (never back up)
+    if (animFps && animFps === animTarget && !map.isMoving() && frames < animTarget * 0.7 && animTarget > 6) {
+      animTarget = Math.max(6, Math.round(animTarget * 0.8));
+      syncAnim();
+    }
+    $('perf').textContent = `${frames} fps · ${QUALITY} quality · last year change ${lastApplyMs.toFixed(0)} ms`;
+    frames = 0;
+  }, 1000);
+
+  // ============================================================ go
+  map.on('load', () => {
+    try {
+      const cam = map.cameraForBounds([[W, S], [E, N]], { padding: 24 });
+      HOME = { center: AREA_CENTRE, zoom: cam.zoom, pitch: DEFAULT_PITCH, bearing: DEFAULT_BEARING };
+      map.setMinZoom(Math.max(cam.zoom - 0.4, 8));
+      map.jumpTo(HOME);
+      map.addLayer(sceneLayer);                       // last in the stack: after the mask and the 3D map layers
+      yearEl.textContent = slider.value;
+      applySeason($('season').value);
+      onYearChange(true);
+      resetIdle();
+      updateStatus();
+      // heavy 3D content is built after the first frame, in small steps, so the map appears straight away
+      buildSceneContent().catch(err => { console.error('3D content error:', err); statusEl.textContent = `3D content error: ${err?.message || err}`; });
+    } catch (err) {
+      console.error('Viewer load error:', err);
+      statusEl.textContent = `Viewer load error: ${err?.message || err}`;
+    }
+  });
+
+  window.__viewer = { map, stats, Uni, treeGroup, waterGroup, mistGroup, transportGroup, frame, waterColour, waterHi, waterLo, waterStrength, get hf() { return hf; } };   // handy for debugging in the console
+}
+
+start().catch(err => {
+  statusEl.textContent = 'Failed: ' + err.message;
+  console.error(err);
+});
+</script>
+</body>
+</html>
