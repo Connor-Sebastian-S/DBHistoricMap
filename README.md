@@ -1,6 +1,6 @@
-# **Dunkeld Through Time**
+# **Dunkeld and Birnam Through Time**
 
-An interactive 3D historical map of Dunkeld, Scotland, covering the period from 1200 to 2026. The application combines historical cartography, geographical data and procedural 3D rendering to reconstruct how the town and its surrounding landscape have evolved.
+An interactive 3D historical map of Dunkeld and Birnam, Scotland, covering the period from 1200 to 2026. The application combines historical cartography, geographical data and procedural 3D rendering to reconstruct how the town and its surrounding landscape have evolved.
 
 Built using **MapLibre GL JS** and **Three.js**, it features:
 
